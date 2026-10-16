@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -17,7 +18,19 @@ import (
 // MaxBodyBytes is the largest request body accepted (Lambda's 6 MB payload limit).
 const MaxBodyBytes = 6 << 20
 
-const shutdownGrace = 10 * time.Second
+// Shutdown timing. After SIGTERM the server keeps serving for PreStopDelay so
+// that the pod's endpoint removal reaches the interceptor and kube-proxy
+// before the listener closes, then drains in-flight requests for up to the
+// function timeout plus DrainSlack. The pod's terminationGracePeriodSeconds
+// covers both (see internal/resources).
+const (
+	PreStopDelay = 5 * time.Second
+	DrainSlack   = 2 * time.Second
+)
+
+// DrainTimeout is how long shutdown waits for in-flight requests: the longest
+// an invocation can run (timeout) plus DrainSlack.
+func DrainTimeout(timeout time.Duration) time.Duration { return timeout + DrainSlack }
 
 // Server exposes a Pool over HTTP: invocations on one port (every request is
 // translated to an API Gateway v2 event) and health/metrics on an admin port.
@@ -32,12 +45,18 @@ type Server struct {
 
 	main, admin     *http.Server
 	mainLn, adminLn net.Listener
+
+	preStop time.Duration // serve this long after ctx is done before shutting down
+	drain   time.Duration // then wait this long for in-flight requests
 }
 
 // NewServer returns a Server for p. port serves invocations; adminPort serves
 // /healthz, /readyz and /metrics.
 func NewServer(p *Pool, port, adminPort int) *Server {
-	s := &Server{pool: p, port: port, adminPort: adminPort, registry: prometheus.NewRegistry()}
+	s := &Server{
+		pool: p, port: port, adminPort: adminPort, registry: prometheus.NewRegistry(),
+		preStop: PreStopDelay, drain: DrainTimeout(p.cfg.Timeout),
+	}
 	s.invocations = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "funcrt_invocations_total", Help: "Invocations by HTTP status returned.",
 	}, []string{"status"})
@@ -68,8 +87,10 @@ func NewServer(p *Pool, port, adminPort int) *Server {
 	return s
 }
 
-// Run listens on both ports and serves until ctx is done, then shuts down
-// gracefully. It returns nil on clean shutdown.
+// Run listens on both ports and serves until ctx is done. It then keeps
+// serving for the pre-stop window, stops accepting and drains in-flight
+// requests (see PreStopDelay, DrainTimeout). It returns nil when the drain
+// completes.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.listen(); err != nil {
 		return err
@@ -97,9 +118,15 @@ func (s *Server) serve(ctx context.Context) error {
 	var serveErr error
 	select {
 	case <-ctx.Done():
+		slog.Default().Info("shutdown requested; serving through the pre-stop window",
+			"component", "funcrt", "preStop", s.preStop.String(), "drain", s.drain.String())
+		select {
+		case <-time.After(s.preStop):
+		case serveErr = <-errc:
+		}
 	case serveErr = <-errc:
 	}
-	sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	sctx, cancel := context.WithTimeout(context.Background(), s.drain)
 	defer cancel()
 	err := errors.Join(s.main.Shutdown(sctx), s.admin.Shutdown(sctx))
 	if errors.Is(serveErr, http.ErrServerClosed) {
