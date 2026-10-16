@@ -11,10 +11,25 @@ spec:
     kind: Function
     listKind: FunctionList
     plural: functions
+    shortNames:
+    - fn
     singular: function
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.source.version
+      name: Version
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Function is the Schema for the functions API
@@ -39,25 +54,264 @@ spec:
           spec:
             description: spec defines the desired state of Function
             properties:
-              foo:
-                description: foo is an example field of Function. Edit function_types.go
-                  to remove/update
+              architectures:
+                default:
+                - amd64
+                description: architectures to run on.
+                items:
+                  enum:
+                  - amd64
+                  - arm64
+                  type: string
+                minItems: 1
+                type: array
+              concurrency:
+                default: 1
+                description: concurrency is the number of bootstrap copies per pod.
+                format: int32
+                maximum: 64
+                minimum: 1
+                type: integer
+              env:
+                description: env is the environment passed to the function.
+                items:
+                  description: EnvVar represents an environment variable present in
+                    a Container.
+                  properties:
+                    name:
+                      description: |-
+                        Name of the environment variable.
+                        May consist of any printable ASCII characters except '='.
+                      type: string
+                    value:
+                      description: |-
+                        Variable references $(VAR_NAME) are expanded
+                        using the previously defined environment variables in the container and
+                        any service environment variables. If a variable cannot be resolved,
+                        the reference in the input string will be unchanged. Double $$ are reduced
+                        to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                        "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                        Escaped references will never be expanded, regardless of whether the variable
+                        exists or not.
+                        Defaults to "".
+                      type: string
+                    valueFrom:
+                      description: Source for the environment variable's value. Cannot
+                        be used if value is not empty.
+                      properties:
+                        configMapKeyRef:
+                          description: Selects a key of a ConfigMap.
+                          properties:
+                            key:
+                              description: |-
+                                The key to select from the ConfigMap's Data field.
+                                Keys in the BinaryData field are not currently propagated to container env vars.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fieldRef:
+                          description: |-
+                            Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                            spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                          properties:
+                            apiVersion:
+                              description: Version of the schema the FieldPath is
+                                written in terms of, defaults to "v1".
+                              type: string
+                            fieldPath:
+                              description: Path of the field to select in the specified
+                                API version.
+                              type: string
+                          required:
+                          - fieldPath
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fileKeyRef:
+                          description: |-
+                            FileKeyRef selects a key of the env file.
+                            Requires the EnvFiles feature gate to be enabled.
+                          properties:
+                            key:
+                              description: |-
+                                The key within the env file. An invalid key will prevent the pod from starting.
+                                The keys defined within a source may consist of any printable ASCII characters except '='.
+                                During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                              type: string
+                            optional:
+                              default: false
+                              description: |-
+                                Specify whether the file or its key must be defined. If the file or key
+                                does not exist, then the env var is not published.
+                                If optional is set to true and the specified key does not exist,
+                                the environment variable will not be set in the Pod's containers.
+
+                                If optional is set to false and the specified key does not exist,
+                                an error will be returned during Pod creation.
+                              type: boolean
+                            path:
+                              description: |-
+                                The path within the volume from which to select the file.
+                                Must be relative and may not contain the '..' path or start with '..'.
+                              type: string
+                            volumeName:
+                              description: The name of the volume mount containing
+                                the env file.
+                              type: string
+                          required:
+                          - key
+                          - path
+                          - volumeName
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        resourceFieldRef:
+                          description: |-
+                            Selects a resource of the container: only resources limits and requests
+                            (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                          properties:
+                            containerName:
+                              description: 'Container name: required for volumes,
+                                optional for env vars'
+                              type: string
+                            divisor:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Specifies the output format of the exposed
+                                resources, defaults to "1"
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            resource:
+                              description: 'Required: resource to select'
+                              type: string
+                          required:
+                          - resource
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        secretKeyRef:
+                          description: Selects a key of a secret in the pod's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+              memory:
+                anyOf:
+                - type: integer
+                - type: string
+                default: 128Mi
+                description: memory per bootstrap copy.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              payload:
+                description: payload is the event passed to a job instead of the default
+                  scheduled event.
+                x-kubernetes-preserve-unknown-fields: true
+              scaling:
+                description: scaling bounds replicas (services only).
+                properties:
+                  max:
+                    default: 10
+                    description: max is the maximum number of replicas.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  min:
+                    default: 0
+                    description: min is the minimum number of replicas (0 allows scale
+                      to zero).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              schedule:
+                description: schedule is a cron expression (jobs only).
                 type: string
+              source:
+                description: source locates the bootstrap binaries in S3.
+                properties:
+                  bucket:
+                    description: bucket is the S3 bucket holding the function.
+                    minLength: 1
+                    type: string
+                  key:
+                    description: key is the S3 key prefix. Defaults to metadata.name
+                      when empty.
+                    type: string
+                  version:
+                    description: version is a fixed version string, or "latest".
+                    minLength: 1
+                    type: string
+                required:
+                - bucket
+                - version
+                type: object
+              timeout:
+                default: 30s
+                description: timeout per invocation.
+                type: string
+              type:
+                description: type is "service" (HTTP) or "job" (cron).
+                enum:
+                - service
+                - job
+                type: string
+            required:
+            - source
+            - type
             type: object
+            x-kubernetes-validations:
+            - message: schedule is required for jobs and forbidden for services
+              rule: 'self.type == ''job'' ? has(self.schedule) : !has(self.schedule)'
+            - message: scaling is only allowed for services
+              rule: self.type == 'service' || !has(self.scaling)
+            - message: concurrency must be 1 for jobs
+              rule: self.type == 'service' || !has(self.concurrency) || self.concurrency
+                == 1
+            - message: scaling.min must be <= scaling.max
+              rule: '!has(self.scaling) || self.scaling.min <= self.scaling.max'
           status:
             description: status defines the observed state of Function
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the Function resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: conditions represent the current state of the Function
+                  resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +370,19 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              etags:
+                additionalProperties:
+                  type: string
+                description: etags maps architecture to the S3 ETag of the resolved
+                  bootstrap.
+                type: object
+              observedGeneration:
+                description: observedGeneration is the last reconciled metadata.generation.
+                format: int64
+                type: integer
+              resolvedVersion:
+                description: resolvedVersion is the concrete version currently deployed.
+                type: string
             type: object
         required:
         - spec

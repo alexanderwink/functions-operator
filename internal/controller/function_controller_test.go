@@ -54,7 +54,10 @@ var _ = Describe("Function Controller", func() {
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: functionsv1alpha1.FunctionSpec{
+						Type:   functionsv1alpha1.FunctionTypeService,
+						Source: functionsv1alpha1.Source{Bucket: "b", Version: "latest"},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
