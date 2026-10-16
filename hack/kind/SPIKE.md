@@ -51,4 +51,5 @@ scaled the deployment to 0 within seconds of creation.
 - MinIO: `quay.io/minio/*` and `minio/*` Docker Hub images are no longer pullable, so the `minio/minio`
   chart cannot run. `hack/kind/minio.yaml` deploys the last `bitnamilegacy/minio` image (2025.5.24) instead,
   same endpoint, credentials and bucket.
-- An old `kind` v0.11 is first on PATH here; scripts prepend `/opt/homebrew/bin` to use kind 0.26.
+- An old `kind` v0.11 is first on PATH on the dev machine; scripts require kind >= 0.20 and honour `KIND`.
+  Locally run e.g. `make kind-up KIND=/opt/homebrew/bin/kind` (kind 0.26).

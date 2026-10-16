@@ -2,16 +2,22 @@
 # Create the local kind cluster "functions" with KEDA, the KEDA HTTP add-on and MinIO.
 set -euo pipefail
 export KIND_EXPERIMENTAL_PROVIDER=podman
-# Prefer the Homebrew kind (>= 0.20); an old kind on PATH picks an outdated node image.
-export PATH="/opt/homebrew/bin:$PATH"
+KIND="${KIND:-kind}"
+# Require kind >= 0.20 (older versions pick an outdated node image). Override with KIND=/path/to/kind.
+kind_ver="$("$KIND" version 2>/dev/null | sed -nE 's/^kind v([0-9]+)\.([0-9]+).*/\1 \2/p')" || true
+read -r kmaj kmin <<<"${kind_ver:-0 0}"
+if [ "$kmaj" -eq 0 ] && [ "$kmin" -lt 20 ]; then
+  echo "error: '$KIND' is kind ${kmaj}.${kmin}; need >= 0.20. Set KIND=/path/to/newer/kind." >&2
+  exit 1
+fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEDA_CHART_VERSION="${KEDA_CHART_VERSION:-2.21.0}"
 HTTP_ADDON_CHART_VERSION="${HTTP_ADDON_CHART_VERSION:-0.16.0}"
 CTX=kind-functions
 
-if ! kind get clusters 2>/dev/null | grep -qx functions; then
-  kind create cluster --config "$DIR/cluster.yaml"
+if ! "$KIND" get clusters 2>/dev/null | grep -qx functions; then
+  "$KIND" create cluster --config "$DIR/cluster.yaml"
 fi
 kubectl config use-context "$CTX" >/dev/null
 

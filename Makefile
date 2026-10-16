@@ -262,20 +262,19 @@ endef
 ##@ Local kind environment
 
 export KIND_EXPERIMENTAL_PROVIDER = podman
-export PATH := /opt/homebrew/bin:$(PATH)
 
 .PHONY: kind-up
 kind-up: ## Create kind cluster with KEDA, HTTP add-on and MinIO.
-	./hack/kind/up.sh
+	KIND="$(KIND)" ./hack/kind/up.sh
 
 .PHONY: kind-down
 kind-down: ## Delete the kind cluster.
-	./hack/kind/down.sh
+	KIND="$(KIND)" ./hack/kind/down.sh
 
 .PHONY: kind-load
 kind-load: ## Build IMG (native arch) and load it into the kind cluster (usage: make kind-load IMG=<image>).
 	$(CONTAINER_TOOL) build -t $(IMG) .
 	tmp=$$(mktemp -d) && \
 	$(CONTAINER_TOOL) save -o $$tmp/image.tar $(IMG) && \
-	kind load image-archive $$tmp/image.tar --name functions; \
+	$(KIND) load image-archive $$tmp/image.tar --name functions; \
 	rc=$$?; rm -rf $$tmp; exit $$rc
