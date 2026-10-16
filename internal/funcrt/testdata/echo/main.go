@@ -6,7 +6,8 @@
 //	{"error":"boom"} returns errors.New("boom")
 //	{"exit":1}       calls os.Exit(1)
 //	{"rawPath":"/p",...} (an API Gateway v2 event) returns a response whose
-//	                 body is the rawPath; rawPath "/sleep/<duration>" sleeps first
+//	                 body is the rawPath; rawPath "/sleep/<duration>" sleeps first,
+//	                 rawPath "/error/<msg>" returns errors.New(msg)
 //
 // With ECHO_INIT_FAIL=1 in the environment it exits with code 2 before calling
 // lambda.Start.
@@ -39,6 +40,9 @@ func handle(_ context.Context, in json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	if req.RawPath != nil {
+		if msg, ok := strings.CutPrefix(*req.RawPath, "/error/"); ok {
+			return nil, errors.New(msg)
+		}
 		if d, err := time.ParseDuration(strings.TrimPrefix(*req.RawPath, "/sleep/")); err == nil {
 			time.Sleep(d)
 		}

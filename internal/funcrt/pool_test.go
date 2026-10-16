@@ -235,8 +235,8 @@ func TestPoolHandlerError(t *testing.T) {
 	p := startPool(t, PoolConfig{Concurrency: 1, Timeout: 5 * time.Second})
 
 	res := invoke(t, p, `{"error":"boom"}`)
-	if res.Status != 502 {
-		t.Fatalf("status = %d, payload %s; want 502", res.Status, res.Payload)
+	if res.Status != 500 {
+		t.Fatalf("status = %d, payload %s; want 500 (R17)", res.Status, res.Payload)
 	}
 	if !strings.Contains(string(res.Payload), "boom") {
 		t.Fatalf("payload %s does not contain %q", res.Payload, "boom")

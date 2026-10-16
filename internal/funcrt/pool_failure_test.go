@@ -165,8 +165,8 @@ func TestPoolBackoffResetsAfterHandledError(t *testing.T) {
 			t.Fatalf("crash %d: status = %d; want 502", i, r.Status)
 		}
 	}
-	if r := invoke(t, p, `{"error":"boom"}`); r.Status != 502 || errorType(t, r) == "Runtime.ExitError" {
-		t.Fatalf("handled error: status = %d, payload %s; want 502 handler error", r.Status, r.Payload)
+	if r := invoke(t, p, `{"error":"boom"}`); r.Status != 500 || errorType(t, r) == "Runtime.ExitError" {
+		t.Fatalf("handled error: status = %d, payload %s; want 500 handler error", r.Status, r.Payload)
 	}
 	if got := w.nextBackoff(); got != 100*time.Millisecond {
 		t.Errorf("backoff after handled error = %v; want 100ms", got)

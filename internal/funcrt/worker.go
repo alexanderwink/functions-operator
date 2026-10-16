@@ -404,7 +404,7 @@ func (w *worker) handleError(rw http.ResponseWriter, r *http.Request) {
 			}
 			body = errorPayload(errType, "function returned an error")
 		}
-		return Result{Status: http.StatusBadGateway, Payload: body}
+		return Result{Status: http.StatusInternalServerError, Payload: body}
 	})
 }
 

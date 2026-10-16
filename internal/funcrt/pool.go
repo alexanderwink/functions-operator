@@ -32,8 +32,9 @@ type PoolConfig struct {
 
 // Result is the outcome of one invocation.
 type Result struct {
-	Status  int    // 200 ok, 502 handler error/crash, 504 timeout
-	Payload []byte // response payload, or Lambda error JSON for 502/504
+	Status    int    // 200 ok, 500 handler error (/invocation/error), 502 crash/no response, 504 timeout
+	Payload   []byte // response payload, or Lambda error JSON otherwise
+	RequestID string // Lambda request id of the invocation (set by Invoke)
 }
 
 // Pool runs Concurrency bootstrap processes and dispatches invocations to
@@ -110,7 +111,9 @@ func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	inv := newInvocation(ctx, payload, time.Now().Add(p.cfg.Timeout))
-	return p.invoke(ctx, inv)
+	res := p.invoke(ctx, inv)
+	res.RequestID = inv.id
+	return res
 }
 
 func (p *Pool) invoke(ctx context.Context, inv *invocation) Result {

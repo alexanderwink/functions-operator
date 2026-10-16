@@ -125,13 +125,27 @@ func TestWriteResponseSimple(t *testing.T) {
 	}
 }
 
+// R17: failures keep their status but carry API Gateway's generic body, never
+// the Lambda error document.
 func TestWriteResponseErrors(t *testing.T) {
-	for _, st := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+	for st, body := range map[int]string{
+		http.StatusInternalServerError: `{"message":"Internal Server Error"}`,
+		http.StatusBadGateway:          `{"message":"Bad Gateway"}`,
+		http.StatusGatewayTimeout:      `{"message":"Gateway Timeout"}`,
+	} {
 		w := httptest.NewRecorder()
-		WriteResponse(w, Result{Status: st, Payload: []byte(`{"errorMessage":"x"}`)})
-		if w.Code != st || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != `{"errorMessage":"x"}` {
-			t.Errorf("status %d: code=%d body=%q", st, w.Code, w.Body.String())
+		WriteResponse(w, Result{Status: st, Payload: []byte(`{"errorMessage":"secret detail"}`), RequestID: "r1"})
+		if w.Code != st || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != body {
+			t.Errorf("status %d: code=%d ct=%q body=%q; want body %s", st, w.Code, w.Header().Get("Content-Type"), w.Body.String(), body)
 		}
+	}
+}
+
+func TestWriteResponseInvalidStatusCodeIsGeneric502(t *testing.T) {
+	w := httptest.NewRecorder()
+	WriteResponse(w, Result{Status: 200, Payload: []byte(`{"statusCode":5,"headers":{"x-a":"b"},"body":"x"}`)})
+	if w.Code != 502 || w.Body.String() != `{"message":"Bad Gateway"}` || w.Header().Get("x-a") != "" {
+		t.Errorf("code=%d hdr=%v body=%q", w.Code, w.Header(), w.Body.String())
 	}
 }
 

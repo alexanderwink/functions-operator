@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -116,34 +117,56 @@ func isTextContent(contentType string) bool {
 //
 // A 200 whose payload is a JSON object with "statusCode" is decoded as an
 // APIGatewayV2HTTPResponse. Any other 200 payload is a v2 "simple response"
-// and is written verbatim as application/json. Other statuses (502, 504)
-// carry the Lambda error document as a JSON body.
+// and is written verbatim as application/json.
+//
+// Failures never expose the Lambda error document to the client, as API
+// Gateway does (ruling R17): a handler error (500) answers
+// {"message":"Internal Server Error"}, a crash or invalid response (502)
+// {"message":"Bad Gateway"} and a timeout (504) {"message":"Gateway
+// Timeout"}. The error document is logged at warn with the request id.
 func WriteResponse(w http.ResponseWriter, res Result) {
-	if res.Status == http.StatusOK {
-		var probe struct {
-			StatusCode *int `json:"statusCode"`
-		}
-		if json.Unmarshal(res.Payload, &probe) == nil && probe.StatusCode != nil {
-			var resp events.APIGatewayV2HTTPResponse
-			if err := json.Unmarshal(res.Payload, &resp); err == nil {
-				writeStructured(w, resp)
-				return
-			}
+	if res.Status != http.StatusOK {
+		logFailure(res.RequestID, res.Status, res.Payload)
+		writeGeneric(w, res.Status)
+		return
+	}
+	var probe struct {
+		StatusCode *int `json:"statusCode"`
+	}
+	if json.Unmarshal(res.Payload, &probe) == nil && probe.StatusCode != nil {
+		var resp events.APIGatewayV2HTTPResponse
+		if err := json.Unmarshal(res.Payload, &resp); err == nil {
+			writeStructured(w, res.RequestID, resp)
+			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(res.Status)
+	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(res.Payload)
 }
 
-func writeStructured(w http.ResponseWriter, resp events.APIGatewayV2HTTPResponse) {
+func logFailure(requestID string, status int, errorDoc []byte) {
+	slog.Default().Warn("invocation failed", "component", "funcrt", "requestId", requestID,
+		"status", status, "error", string(errorDoc))
+}
+
+// writeGeneric writes API Gateway's generic error body for status.
+func writeGeneric(w http.ResponseWriter, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	b, _ := json.Marshal(struct {
+		Message string `json:"message"`
+	}{http.StatusText(status)})
+	_, _ = w.Write(b)
+}
+
+func writeStructured(w http.ResponseWriter, requestID string, resp events.APIGatewayV2HTTPResponse) {
 	body := []byte(resp.Body)
 	if resp.IsBase64Encoded {
 		dec, err := base64.StdEncoding.DecodeString(resp.Body)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write(errorPayload("Function.InvalidResponse", "isBase64Encoded set but body is not valid base64"))
+			logFailure(requestID, http.StatusBadGateway, errorPayload("Function.InvalidResponse", "isBase64Encoded set but body is not valid base64"))
+			writeGeneric(w, http.StatusBadGateway)
 			return
 		}
 		body = dec
@@ -165,9 +188,11 @@ func writeStructured(w http.ResponseWriter, resp events.APIGatewayV2HTTPResponse
 		h.Add("Set-Cookie", c)
 	}
 	if resp.StatusCode < 100 || resp.StatusCode > 999 {
-		h.Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write(errorPayload("Function.InvalidResponse", "invalid statusCode"))
+		logFailure(requestID, http.StatusBadGateway, errorPayload("Function.InvalidResponse", "invalid statusCode"))
+		for k := range h {
+			delete(h, k) // drop the function's headers from the generic error
+		}
+		writeGeneric(w, http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(resp.StatusCode)
