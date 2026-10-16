@@ -100,7 +100,10 @@ type FunctionSpec struct {
 	// +optional
 	Architectures []string `json:"architectures,omitempty"`
 
-	// env is the environment passed to the function.
+	// env is the environment passed to the function. Names starting with
+	// FUNCRT_ or AWS_LAMBDA_, and LAMBDA_TASK_ROOT and _HANDLER, are reserved.
+	// +kubebuilder:validation:MaxItems=256
+	// +kubebuilder:validation:XValidation:rule="self.all(e, !e.name.startsWith('FUNCRT_') && !e.name.startsWith('AWS_LAMBDA_') && e.name != 'LAMBDA_TASK_ROOT' && e.name != '_HANDLER')",message="env name is reserved by the platform (FUNCRT_*, AWS_LAMBDA_*, LAMBDA_TASK_ROOT, _HANDLER)"
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 

@@ -103,7 +103,12 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 		fetchEnv = append(fetchEnv, corev1.EnvVar{Name: "FETCH_ETAG_" + upper(a), Value: r.ETags[a]})
 	}
 
-	env := []corev1.EnvVar{
+	// User env comes first so platform values win (Kubernetes uses the last duplicate).
+	env := make([]corev1.EnvVar, 0, len(fn.Spec.Env)+10)
+	for _, e := range fn.Spec.Env {
+		env = append(env, *e.DeepCopy())
+	}
+	env = append(env, []corev1.EnvVar{
 		{Name: "FUNCRT_MODE", Value: mode},
 		{Name: "FUNCRT_BOOTSTRAP", Value: "/var/task/bootstrap"},
 		{Name: "FUNCRT_CONCURRENCY", Value: strconv.FormatInt(conc, 10)},
@@ -113,14 +118,10 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 		{Name: "AWS_LAMBDA_FUNCTION_NAME", Value: fn.Name},
 		{Name: "AWS_LAMBDA_FUNCTION_VERSION", Value: r.Version},
 		{Name: "AWS_LAMBDA_FUNCTION_MEMORY_SIZE", Value: strconv.FormatInt(memMiB, 10)},
-	}
+	}...)
 	if mode == "job" && fn.Spec.Payload != nil && len(fn.Spec.Payload.Raw) > 0 {
 		env = append(env, corev1.EnvVar{Name: "FUNCRT_PAYLOAD", Value: string(fn.Spec.Payload.Raw)})
 	}
-	for _, e := range fn.Spec.Env {
-		env = append(env, *e.DeepCopy())
-	}
-
 	task := corev1.VolumeMount{Name: "task", MountPath: "/var/task"}
 	tmp := corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"}
 

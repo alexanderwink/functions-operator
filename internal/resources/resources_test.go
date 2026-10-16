@@ -110,9 +110,23 @@ func TestPodTemplateUserEnvPassThrough(t *testing.T) {
 	f.Spec.Env = []corev1.EnvVar{{Name: "X", ValueFrom: &corev1.EnvVarSource{
 		SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "k"}}}}
 	c := PodTemplate(f, resolved(), "img").Spec.Containers[0]
-	last := c.Env[len(c.Env)-1]
-	if last.Name != "X" || last.ValueFrom.SecretKeyRef.Name != "s" {
-		t.Fatalf("%+v", last)
+	x := envMap(c)["X"]
+	if x.ValueFrom == nil || x.ValueFrom.SecretKeyRef.Name != "s" {
+		t.Fatalf("%+v", x)
+	}
+}
+
+func TestPodTemplatePlatformEnvWinsOverUser(t *testing.T) {
+	f := fn()
+	f.Spec.Env = []corev1.EnvVar{
+		{Name: "FUNCRT_PORT", Value: "1"},
+		{Name: "AWS_LAMBDA_FUNCTION_NAME", Value: "evil"},
+		{Name: "LOG_LEVEL", Value: "debug"},
+	}
+	c := PodTemplate(f, resolved(), "img").Spec.Containers[0]
+	e := envMap(c) // last duplicate wins, as in Kubernetes
+	if e["FUNCRT_PORT"].Value != "8080" || e["AWS_LAMBDA_FUNCTION_NAME"].Value != "f" || e["LOG_LEVEL"].Value != "debug" {
+		t.Fatalf("%v", e)
 	}
 }
 

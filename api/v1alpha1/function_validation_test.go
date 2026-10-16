@@ -219,3 +219,19 @@ func TestSourceSegments(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvReservedNames(t *testing.T) {
+	env := func(n string) map[string]any {
+		return rawSpec(map[string]any{"env": []any{map[string]any{"name": n, "value": "x"}}})
+	}
+	for _, n := range []string{"FUNCRT_PORT", "AWS_LAMBDA_FUNCTION_NAME", "_HANDLER", "LAMBDA_TASK_ROOT"} {
+		if err := createRaw(t, env(n)); err == nil {
+			t.Errorf("env %q should be rejected", n)
+		}
+	}
+	for _, n := range []string{"LOG_LEVEL", "AWS_REGION"} {
+		if err := createRaw(t, env(n)); err != nil {
+			t.Errorf("env %q should be accepted: %v", n, err)
+		}
+	}
+}
