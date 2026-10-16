@@ -1,0 +1,5 @@
+module github.com/alexanderwink/functions-operator/samples/go-hello
+
+go 1.26
+
+require github.com/aws/aws-lambda-go v1.55.1

@@ -1,0 +1,12 @@
+# Native AOT must be compiled on the target OS/arch: build with
+#   podman build --platform linux/<arch> -f Dockerfile.build -t dotnet-hello-build:<arch> .
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+RUN apt-get update && apt-get install -y --no-install-recommends clang zlib1g-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY dotnet-hello.csproj Function.cs ./
+ARG BUILD=dev
+RUN printf 'namespace DotnetHello; public static class BuildInfo { public const string Id = "%s"; }\n' "$BUILD" > BuildInfo.cs
+RUN dotnet publish -c Release -o /out && ls -l /out/bootstrap
+
+FROM scratch
+COPY --from=build /out/bootstrap /bootstrap

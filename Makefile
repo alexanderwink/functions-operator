@@ -273,8 +273,41 @@ kind-down: ## Delete the kind cluster.
 
 .PHONY: kind-load
 kind-load: ## Build IMG (native arch) and load it into the kind cluster (usage: make kind-load IMG=<image>).
-	$(CONTAINER_TOOL) build -t $(IMG) .
+	$(CONTAINER_TOOL) build -t $(IMG) $(if $(KIND_DOCKERFILE),-f $(KIND_DOCKERFILE)) .
 	tmp=$$(mktemp -d) && \
 	$(CONTAINER_TOOL) save -o $$tmp/image.tar $(IMG) && \
 	$(KIND) load image-archive $$tmp/image.tar --name functions; \
 	rc=$$?; rm -rf $$tmp; exit $$rc
+
+##@ Runtime image and samples
+
+RUNTIME_IMG ?= localhost/functions-runtime:dev
+BUILD ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+SAMPLE_VERSION ?= v1
+ARCHES ?= amd64 arm64
+NATIVE_ARCH ?= $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+
+.PHONY: runtime-image
+runtime-image: ## Build the multi-arch runtime image manifest (funcrt + fetcher).
+	-$(CONTAINER_TOOL) manifest rm $(RUNTIME_IMG) 2>/dev/null
+	$(CONTAINER_TOOL) build --platform $(shell echo $(ARCHES) | sed 's/\([a-z0-9]*\)/linux\/\1/g; s/ /,/g') --manifest $(RUNTIME_IMG) -f images/runtime/Dockerfile .
+
+.PHONY: runtime-image-kind
+runtime-image-kind: ## Build the runtime image for the native arch and load it into kind (manifest lists don't load cleanly).
+	$(MAKE) kind-load IMG=$(RUNTIME_IMG) KIND_DOCKERFILE=images/runtime/Dockerfile
+
+.PHONY: samples
+samples: ## Build sample bootstrap binaries for all ARCHES into samples/out (usage: make samples BUILD=<id>).
+	@for a in $(ARCHES); do \
+	  mkdir -p samples/out/go-hello/linux-$$a samples/out/dotnet-hello/linux-$$a && \
+	  (cd samples/go-hello && CGO_ENABLED=0 GOOS=linux GOARCH=$$a go build -tags lambda.norpc -ldflags "-X main.build=$(BUILD)" -o ../out/go-hello/linux-$$a/bootstrap .) || exit 1; \
+	  $(CONTAINER_TOOL) build --platform linux/$$a --build-arg BUILD=$(BUILD) -f samples/dotnet-hello/Dockerfile.build -t localhost/dotnet-hello-build:$$a samples/dotnet-hello || exit 1; \
+	  c=$$($(CONTAINER_TOOL) create --platform linux/$$a localhost/dotnet-hello-build:$$a /bootstrap) && \
+	  $(CONTAINER_TOOL) cp $$c:/bootstrap samples/out/dotnet-hello/linux-$$a/bootstrap; rc=$$?; \
+	  $(CONTAINER_TOOL) rm $$c >/dev/null; [ $$rc -eq 0 ] || exit $$rc; \
+	done
+
+.PHONY: upload-samples
+upload-samples: ## Upload built samples to the kind MinIO (run `make samples` first).
+	hack/kind/upload-sample.sh go-hello $(SAMPLE_VERSION) samples/out/go-hello
+	hack/kind/upload-sample.sh dotnet-hello $(SAMPLE_VERSION) samples/out/dotnet-hello
