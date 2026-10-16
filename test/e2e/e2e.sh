@@ -44,7 +44,11 @@ wait_for() {
   done
 }
 
-ready() { [ "$(k -n "$NS" get function "$1" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" = True ]; }
+# ready: Ready=True for the current spec (status.observedGeneration == metadata.generation).
+ready() {
+  [ "$(k -n "$NS" get function "$1" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.observedGeneration} {.metadata.generation}' 2>/dev/null |
+    awk '$2 == $3 {print $1}')" = True ]
+}
 replicas() { k -n "$NS" get deploy "$1" -o jsonpath='{.spec.replicas}' 2>/dev/null; }
 scaled_to_zero() {
   [ "$(replicas "$1")" = 0 ] || return 1
@@ -130,8 +134,13 @@ check3() {
     sleep 2
   done
   log "max replicas during load: $max"
-  k -n "$E2E_NS" logs job/e2e-hey 2>/dev/null | grep -E 'Requests/sec|^ +\[[0-9]{3}\]' | sed 's/^/      hey: /'
+  local out; out="$(k -n "$E2E_NS" logs job/e2e-hey 2>/dev/null)"
+  grep -E 'Requests/sec|^ +\[[0-9]+\]|^Error distribution' <<<"$out" | sed 's/^/      hey: /'
   [ "$max" -gt 1 ] || { fail "$c" "replicas never exceeded 1 (max $max)"; return; }
+  grep -qE '^ +\[200\]' <<<"$out" || { fail "$c" "hey got no 200 responses"; return; }
+  if grep -E '^ +\[[0-9]{3}\]' <<<"$out" | grep -qv '\[200\]' || grep -q '^Error distribution' <<<"$out"; then
+    fail "$c" "non-200 responses or errors during scale-out"; return
+  fi
   wait_for 120 scaled_to_zero go-hello || { fail "$c" "go-hello not back to 0 within 2 min (replicas=$(replicas go-hello))"; return; }
   pass "$c"
 }
