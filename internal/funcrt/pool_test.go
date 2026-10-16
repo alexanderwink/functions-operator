@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -294,7 +295,8 @@ func TestPoolNextHeaders(t *testing.T) {
 	// End-to-end tests prove the headers work with lambda.Start; this pins
 	// their exact values.
 	w := &worker{pool: NewPool(PoolConfig{FunctionName: "my-fn", Timeout: time.Second})}
-	inv := newInvocation(context.Background(), []byte(`{}`), time.UnixMilli(1700000000123))
+	inv := newInvocation(context.Background(), []byte(`{}`), time.Now().Add(time.Second))
+	inv.deadline = time.UnixMilli(1700000000123)
 	h := w.nextHeaders(inv)
 	if got := h.Get("Lambda-Runtime-Aws-Request-Id"); got != inv.id || got == "" {
 		t.Errorf("request id = %q; want %q", got, inv.id)
@@ -431,5 +433,76 @@ func TestPoolShutdownCompletesInFlight(t *testing.T) {
 	r := await(t, res, time.Second, "in-flight invocation at shutdown")
 	if r.Status != 502 || errorType(t, r) != "Runtime.Shutdown" {
 		t.Errorf("status = %d, payload %s; want 502 Runtime.Shutdown", r.Status, r.Payload)
+	}
+}
+
+// R16: queue time does not count against execution time. With one copy and
+// Timeout T, two concurrent invocations each running 0.6×T both succeed: the
+// second waits ~0.6×T in the queue (< T) and then gets a full T to run.
+func TestPoolQueueWaitDoesNotCountAgainstExecution(t *testing.T) {
+	const timeout = time.Second
+	p := startPool(t, PoolConfig{Concurrency: 1, Timeout: timeout})
+	waitFor(t, 5*time.Second, "Ready()", p.Ready)
+
+	a := invokeAsync(p, `{"sleep":"600ms"}`)
+	b := invokeAsync(p, `{"sleep":"600ms"}`)
+	for i, ch := range []<-chan Result{a, b} {
+		if r := await(t, ch, 5*time.Second, "invocation"); r.Status != 200 {
+			t.Errorf("invocation %d: status = %d, payload %s; want 200", i, r.Status, r.Payload)
+		}
+	}
+	if n := p.workers[0].exits.Load(); n != 0 {
+		t.Errorf("%d bootstrap exits; want 0 (nothing should be killed)", n)
+	}
+}
+
+// R16: Lambda-Runtime-Deadline-Ms is dispatch time + Timeout, not Invoke + Timeout.
+func TestPoolDeadlineHeaderCountsFromDispatch(t *testing.T) {
+	const timeout = 2 * time.Second
+	p := startPool(t, PoolConfig{Bootstrap: silentBootstrap, Timeout: timeout})
+
+	res := invokeAsync(p, `{"echo":1}`)
+	waitFor(t, time.Second, "Queued() == 1", func() bool { return p.Queued() == 1 })
+	time.Sleep(500 * time.Millisecond) // queued for 0.5s before any poll
+
+	dispatched := time.Now()
+	resp, err := http.Get(runtimeURL(p, "/invocation/next"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	ms, err := strconv.ParseInt(resp.Header.Get("Lambda-Runtime-Deadline-Ms"), 10, 64)
+	if err != nil {
+		t.Fatalf("deadline header: %v", err)
+	}
+	if d := time.UnixMilli(ms).Sub(dispatched); d < timeout-100*time.Millisecond || d > timeout+100*time.Millisecond {
+		t.Errorf("deadline is dispatch + %v; want dispatch + %v", d, timeout)
+	}
+	if postResponse(t, p, resp.Header.Get("Lambda-Runtime-Aws-Request-Id"), `1`) != http.StatusAccepted {
+		t.Error("response not accepted")
+	}
+	if r := await(t, res, time.Second, "invocation"); r.Status != 200 {
+		t.Errorf("status = %d, payload %s; want 200", r.Status, r.Payload)
+	}
+}
+
+// R16: an invocation that exceeds the queue-wait limit gets 504 without any
+// process being killed.
+func TestPoolQueueTimeoutKillsNothing(t *testing.T) {
+	p := startPool(t, PoolConfig{Bootstrap: silentBootstrap, Timeout: 300 * time.Millisecond})
+	w := p.workers[0]
+	waitFor(t, 5*time.Second, "process start", func() bool { return w.starts.Load() >= 1 })
+
+	r := await(t, invokeAsync(p, `{"echo":1}`), 3*time.Second, "queued invocation")
+	if r.Status != 504 || errorType(t, r) != "Function.TimedOut" {
+		t.Errorf("status = %d, payload %s; want 504 Function.TimedOut", r.Status, r.Payload)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := w.exits.Load(); n != 0 {
+		t.Errorf("%d bootstrap exits after a queue timeout; want 0", n)
+	}
+	if q := p.Queued(); q != 0 {
+		t.Errorf("Queued() = %d; want 0", q)
 	}
 }

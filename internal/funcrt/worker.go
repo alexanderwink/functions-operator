@@ -22,7 +22,8 @@ const runtimeAPIPrefix = "/2018-06-01/runtime"
 
 // Restart backoff: a bootstrap that exited (crash, timeout kill, init failure)
 // is restarted after minRestartDelay, doubling on every further exit up to
-// maxRestartDelay. Any answered invocation (/response or /error) resets it.
+// maxRestartDelay. Any answered invocation (/response or /error) resets it, and
+// so does a timeout kill: a timed-out copy is not crash-looping.
 const (
 	minRestartDelay = 100 * time.Millisecond
 	maxRestartDelay = 10 * time.Second
@@ -54,7 +55,7 @@ type worker struct {
 	deadline   *time.Timer // fires onDeadline for current
 	closed     bool        // set at shutdown; no new invocation may become current
 	proc       *os.Process // running bootstrap, nil between processes
-	procGen    int64       // generation of proc
+	procGen    int64       // generation (starts) of the latest process; kept after it exits
 	backoff    time.Duration
 }
 
@@ -143,15 +144,22 @@ func (w *worker) runProcess(ctx context.Context) error {
 	// Own process group so the whole tree can be killed (see killProcess).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	w.initFailed.Store(false)
+	// Start, the generation bump and publishing proc form one critical
+	// section: the new process cannot reach setCurrent or onInitError (both
+	// take w.mu) before its generation is visible.
+	w.mu.Lock()
 	if err := cmd.Start(); err != nil {
+		w.mu.Unlock()
 		return err
 	}
-	gen := w.starts.Add(1)
-	w.setProc(cmd.Process, gen)
+	w.proc, w.procGen = cmd.Process, w.starts.Add(1)
+	w.mu.Unlock()
 	exited := make(chan error, 1)
 	go func() {
 		err := cmd.Wait()
-		w.setProc(nil, 0)
+		w.mu.Lock()
+		w.proc = nil
+		w.mu.Unlock()
 		exited <- err
 	}()
 
@@ -163,12 +171,6 @@ func (w *worker) runProcess(ctx context.Context) error {
 		<-exited
 		return ctx.Err()
 	}
-}
-
-func (w *worker) setProc(p *os.Process, gen int64) {
-	w.mu.Lock()
-	w.proc, w.procGen = p, gen
-	w.mu.Unlock()
 }
 
 // killProcess sends SIGKILL to the running bootstrap's process group. With a
@@ -219,11 +221,15 @@ func (w *worker) onInitError(body []byte) {
 	w.initFailed.Store(true)
 	w.ready.Store(false)
 	w.log().Error("bootstrap init error", "error", string(body))
-	w.killProcess(w.starts.Load())
+	w.mu.Lock()
+	gen := w.procGen
+	w.mu.Unlock()
+	w.killProcess(gen)
 }
 
-// onDeadline fires when inv passes its deadline while in flight: it answers
-// 504 and kills the process that is running it; run then restarts it.
+// onDeadline fires when inv passes its execution deadline while in flight: it
+// answers 504 and kills the process that is running it; run then restarts it
+// after the minimum delay (a timeout is not a crash loop).
 func (w *worker) onDeadline(inv *invocation) {
 	w.mu.Lock()
 	if w.current != inv {
@@ -235,6 +241,7 @@ func (w *worker) onDeadline(inv *invocation) {
 	w.mu.Unlock()
 	inv.complete(timeoutResult("invocation timed out"))
 	w.log().Warn("invocation timed out; killing bootstrap", "requestId", inv.id)
+	w.resetBackoff() // before the kill, so the restart sees it
 	w.killProcess(gen)
 }
 
@@ -293,8 +300,8 @@ func (w *worker) markReady() bool {
 }
 
 // take receives the next dispatchable invocation from the queue. Invocations
-// whose deadline has passed or whose caller has gone away are completed with
-// 504 and skipped. It returns false if ctx is done first.
+// whose queue-wait limit has passed or whose caller has gone away are
+// completed with 504 and skipped. It returns false if ctx is done first.
 func (w *worker) take(ctx context.Context) (*invocation, bool) {
 	for {
 		select {
@@ -306,7 +313,7 @@ func (w *worker) take(ctx context.Context) (*invocation, bool) {
 				w.pool.requeue(inv)
 				return nil, false
 			}
-			if !time.Now().Before(inv.deadline) {
+			if !time.Now().Before(inv.queueDeadline) {
 				inv.complete(timeoutResult("invocation timed out while queued"))
 				continue
 			}
@@ -327,8 +334,9 @@ func (w *worker) nextHeaders(inv *invocation) http.Header {
 	return h
 }
 
-// setCurrent makes inv the in-flight invocation and arms its deadline timer
-// (see onDeadline), completing any invocation it replaces with 502. It returns
+// setCurrent dispatches inv: it sets its execution deadline (now + Timeout),
+// makes it the in-flight invocation and arms the deadline timer (see
+// onDeadline), completing any invocation it replaces with 502. It returns
 // false (leaving inv untouched) if the worker has shut down.
 func (w *worker) setCurrent(inv *invocation) bool {
 	w.mu.Lock()
@@ -337,8 +345,9 @@ func (w *worker) setCurrent(inv *invocation) bool {
 		return false
 	}
 	prev := w.clearCurrentLocked()
-	w.current, w.currentGen = inv, w.starts.Load()
-	w.deadline = time.AfterFunc(time.Until(inv.deadline), func() { w.onDeadline(inv) })
+	inv.deadline = time.Now().Add(w.pool.cfg.Timeout)
+	w.current, w.currentGen = inv, w.procGen
+	w.deadline = time.AfterFunc(w.pool.cfg.Timeout, func() { w.onDeadline(inv) })
 	w.mu.Unlock()
 	if prev != nil {
 		prev.complete(noResponseResult())

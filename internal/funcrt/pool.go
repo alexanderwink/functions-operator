@@ -24,7 +24,7 @@ const (
 type PoolConfig struct {
 	Bootstrap    string        // path to bootstrap binary
 	Concurrency  int           // number of bootstrap copies; < 1 means DefaultConcurrency
-	Timeout      time.Duration // per-invocation timeout, counted from Invoke; <= 0 means DefaultTimeout
+	Timeout      time.Duration // execution timeout, counted from dispatch (and, separately, the queue-wait limit); <= 0 means DefaultTimeout
 	BasePort     int           // worker i listens on 127.0.0.1:BasePort+i
 	Env          []string      // complete bootstrap environment (see BootstrapEnv); not inherited from the process
 	FunctionName string
@@ -93,27 +93,35 @@ func (p *Pool) Wait() { p.wg.Wait() }
 
 // Invoke runs payload on the next idle worker and waits for the result.
 //
-// The invocation deadline is now+Timeout, so time spent queued counts against
-// the timeout. If the deadline passes or ctx is done before a worker takes the
-// invocation, it is never dispatched and Invoke returns 504 promptly. Once
-// dispatched, Invoke returns 504 at the deadline (or as soon as ctx is done)
-// even if the worker never answers. At the same deadline the worker answers
-// 504 itself and kills and restarts the runaway process.
+// Timeout bounds two phases separately (ruling R16). Queue wait: if no worker
+// takes the invocation within Timeout of Invoke (or ctx is done first), it is
+// never dispatched and Invoke returns 504 without killing anything.
+// Execution: once dispatched, the invocation's deadline (also sent to the
+// bootstrap as Lambda-Runtime-Deadline-Ms) is dispatch time + Timeout. At that
+// deadline the worker answers 504 and kills and restarts the runaway process;
+// Invoke itself also returns 504 then (or as soon as ctx is done) even if the
+// worker never answers.
 //
 // Invoke alone maintains the Queued and InFlight gauges, so they cannot leak
 // whatever happens to the invocation inside a worker.
 func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
-	deadline := time.Now().Add(p.cfg.Timeout)
-	inv := newInvocation(ctx, payload, deadline)
+	// Cancelled on return, so an invocation nobody waits for any more is never
+	// dispatched (see worker.take and requeue).
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	inv := newInvocation(ctx, payload, time.Now().Add(p.cfg.Timeout))
+	return p.invoke(ctx, inv)
+}
 
-	timer := time.NewTimer(time.Until(deadline))
-	defer timer.Stop()
+func (p *Pool) invoke(ctx context.Context, inv *invocation) Result {
+	queueTimer := time.NewTimer(time.Until(inv.queueDeadline))
+	defer queueTimer.Stop()
 
 	p.queued.Add(1)
 	select {
 	case p.queue <- inv:
 		p.queued.Add(-1)
-	case <-timer.C:
+	case <-queueTimer.C:
 		p.queued.Add(-1)
 		return timeoutResult("invocation timed out while queued")
 	case <-ctx.Done():
@@ -121,12 +129,15 @@ func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
 		return cancelledResult(ctx.Err())
 	}
 
+	// Backstop for the execution deadline the worker arms at dispatch.
+	execTimer := time.NewTimer(p.cfg.Timeout)
+	defer execTimer.Stop()
 	p.inFlight.Add(1)
 	defer p.inFlight.Add(-1)
 	select {
 	case res := <-inv.result:
 		return res
-	case <-timer.C:
+	case <-execTimer.C:
 		return timeoutResult("invocation timed out")
 	case <-ctx.Done():
 		return cancelledResult(ctx.Err())
@@ -134,11 +145,13 @@ func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
 }
 
 // requeue hands inv back to the queue after a worker took it but could not
-// run it (its /next poll or the worker went away). It gives up, completing inv
-// with 504, at the deadline or when the caller's ctx is done.
+// run it (its /next poll or the worker went away). It gets a fresh queue-wait
+// limit, and gives up, completing inv with 504, when that passes or when the
+// caller has gone away.
 func (p *Pool) requeue(inv *invocation) {
+	inv.queueDeadline = time.Now().Add(p.cfg.Timeout) // ordered before any take by the channel send
 	go func() {
-		timer := time.NewTimer(time.Until(inv.deadline))
+		timer := time.NewTimer(time.Until(inv.queueDeadline))
 		defer timer.Stop()
 		select {
 		case p.queue <- inv:
@@ -174,22 +187,27 @@ func (p *Pool) functionARN() string {
 
 // invocation is one Invoke call travelling from the queue to a worker.
 type invocation struct {
-	id       string
-	ctx      context.Context
-	payload  []byte
-	deadline time.Time
-	result   chan Result // buffered(1): completing never blocks, even if Invoke gave up
+	id      string
+	ctx     context.Context // done once Invoke has returned
+	payload []byte
+	// queueDeadline is when waiting for a worker gives up (Invoke + Timeout,
+	// renewed on requeue). deadline is the execution deadline, set by the
+	// worker at dispatch (setCurrent). Both are written only while no other
+	// goroutine can read them (before the queue send that hands inv over).
+	queueDeadline time.Time
+	deadline      time.Time
+	result        chan Result // buffered(1): completing never blocks, even if Invoke gave up
 
 	once sync.Once
 }
 
-func newInvocation(ctx context.Context, payload []byte, deadline time.Time) *invocation {
+func newInvocation(ctx context.Context, payload []byte, queueDeadline time.Time) *invocation {
 	return &invocation{
-		id:       newRequestID(),
-		ctx:      ctx,
-		payload:  payload,
-		deadline: deadline,
-		result:   make(chan Result, 1),
+		id:            newRequestID(),
+		ctx:           ctx,
+		payload:       payload,
+		queueDeadline: queueDeadline,
+		result:        make(chan Result, 1),
 	}
 }
 

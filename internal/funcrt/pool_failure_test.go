@@ -172,3 +172,29 @@ func TestPoolBackoffResetsAfterHandledError(t *testing.T) {
 		t.Errorf("backoff after handled error = %v; want 100ms", got)
 	}
 }
+
+// A timeout kill resets the restart backoff: a timed-out copy is not
+// crash-looping, so it is restarted after the minimum delay.
+func TestPoolBackoffResetsAfterTimeoutKill(t *testing.T) {
+	p := startPool(t, PoolConfig{Concurrency: 1, Timeout: 300 * time.Millisecond})
+	w := p.workers[0]
+	for i := range 3 {
+		if r := invoke(t, p, `{"exit":1}`); r.Status != 502 {
+			t.Fatalf("crash %d: status = %d; want 502", i, r.Status)
+		}
+	}
+	// Backoff is now 800ms (100, 200, 400 consumed).
+	waitFor(t, 5*time.Second, "Ready() after crashes", p.Ready)
+	if r := invoke(t, p, `{"sleep":"5s"}`); r.Status != 504 {
+		t.Fatalf("sleep: status = %d; want 504", r.Status)
+	}
+	start := time.Now()
+	waitRestarted(t, p, 4)
+	if elapsed := time.Since(start); elapsed >= 700*time.Millisecond {
+		t.Errorf("restart after timeout kill took %v; want the minimum delay, not 800ms", elapsed)
+	}
+	// Reset to 0, then the restart consumed minRestartDelay: next is 200ms.
+	if got := w.nextBackoff(); got != 200*time.Millisecond {
+		t.Errorf("backoff after timeout kill and restart = %v; want 200ms", got)
+	}
+}
