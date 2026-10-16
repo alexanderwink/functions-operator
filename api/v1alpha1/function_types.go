@@ -49,12 +49,17 @@ type Source struct {
 	// +required
 	Bucket string `json:"bucket"`
 
-	// key is the S3 key prefix. Defaults to metadata.name when empty.
+	// key is a single S3 path segment. Defaults to metadata.name when empty.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]*$`
 	// +optional
 	Key string `json:"key,omitempty"`
 
-	// version is a fixed version string, or "latest".
+	// version is a single path segment: a fixed version string, or "latest".
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]*$`
 	// +required
 	Version string `json:"version"`
 }
@@ -101,11 +106,13 @@ type FunctionSpec struct {
 
 	// memory per bootstrap copy.
 	// +kubebuilder:default="128Mi"
+	// +kubebuilder:validation:XValidation:rule="quantity(string(self)).isGreaterThan(quantity('0'))",message="memory must be greater than 0"
 	// +optional
 	Memory resource.Quantity `json:"memory,omitzero"`
 
 	// timeout per invocation.
 	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="timeout must be greater than 0"
 	// +optional
 	Timeout metav1.Duration `json:"timeout,omitzero"`
 

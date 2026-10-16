@@ -10,6 +10,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -146,5 +147,75 @@ func TestDefaults(t *testing.T) {
 	}
 	if got.Spec.Memory.String() != "128Mi" {
 		t.Errorf("memory = %s", got.Spec.Memory.String())
+	}
+}
+
+func createRaw(t *testing.T, spec map[string]any) error {
+	t.Helper()
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": GroupVersion.String(),
+		"kind":       "Function",
+		"metadata": map[string]any{
+			"name":      fmt.Sprintf("raw-%d", counter.Add(1)),
+			"namespace": "default",
+		},
+		"spec": spec,
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return k8sClient.Create(ctx, u)
+}
+
+func rawSpec(over map[string]any) map[string]any {
+	spec := map[string]any{
+		"type":   "service",
+		"source": map[string]any{"bucket": "b", "version": "latest"},
+	}
+	for k, v := range over {
+		spec[k] = v
+	}
+	return spec
+}
+
+func TestRejectsNonPositiveTimeout(t *testing.T) {
+	for _, v := range []string{"0s", "-5s"} {
+		if err := createRaw(t, rawSpec(map[string]any{"timeout": v})); err == nil {
+			t.Errorf("timeout %q should be rejected", v)
+		}
+	}
+	if err := createRaw(t, rawSpec(map[string]any{"timeout": "5s"})); err != nil {
+		t.Errorf("timeout 5s should be accepted: %v", err)
+	}
+}
+
+func TestRejectsNonPositiveMemory(t *testing.T) {
+	for _, v := range []any{"0", int64(0), "-1Mi"} {
+		if err := createRaw(t, rawSpec(map[string]any{"memory": v})); err == nil {
+			t.Errorf("memory %v should be rejected", v)
+		}
+	}
+	if err := createRaw(t, rawSpec(map[string]any{"memory": "256Mi"})); err != nil {
+		t.Errorf("memory 256Mi should be accepted: %v", err)
+	}
+}
+
+func TestSourceSegments(t *testing.T) {
+	bad := []string{"../x", "a/b", "..", "/v1", ".hidden"}
+	good := []string{"v42", "latest", "orders-api", "1.2.3"}
+	for _, field := range []string{"key", "version"} {
+		for _, v := range bad {
+			src := map[string]any{"bucket": "b", "version": "latest"}
+			src[field] = v
+			if err := createRaw(t, rawSpec(map[string]any{"source": src})); err == nil {
+				t.Errorf("%s %q should be rejected", field, v)
+			}
+		}
+		for _, v := range good {
+			src := map[string]any{"bucket": "b", "version": "latest"}
+			src[field] = v
+			if err := createRaw(t, rawSpec(map[string]any{"source": src})); err != nil {
+				t.Errorf("%s %q should be accepted: %v", field, v, err)
+			}
+		}
 	}
 }
