@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/minio/minio-go/v7"
@@ -17,6 +18,20 @@ import (
 
 // ErrETagMismatch is returned when the object's ETag no longer matches the pinned one.
 var ErrETagMismatch = errors.New("etag mismatch")
+
+// ParseUseSSL parses the S3 Secret's useSSL value (strconv.ParseBool syntax).
+// The key is required: an empty value is an error, as is any value ParseBool
+// rejects. The operator and the fetcher both use it, so they cannot disagree.
+func ParseUseSSL(v string) (bool, error) {
+	if v == "" {
+		return false, errors.New(`useSSL is required ("true" or "false")`)
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return false, fmt.Errorf(`useSSL %q is not a boolean ("true" or "false")`, v)
+	}
+	return b, nil
+}
 
 // ObjectFor returns the object key of the bootstrap for an architecture.
 func ObjectFor(prefix, arch string) string {
@@ -101,6 +116,7 @@ func Run(ctx context.Context, getenv func(string) string, arch string, stderr io
 		return v
 	}
 	endpoint, ak, sk := need("S3_ENDPOINT"), need("S3_ACCESS_KEY"), need("S3_SECRET_KEY")
+	useSSLRaw := need("S3_USE_SSL")
 	bucket, prefix := need("FETCH_BUCKET"), need("FETCH_PREFIX")
 	etagVar := "FETCH_ETAG_" + strings.ToUpper(arch)
 	etag := getenv(etagVar)
@@ -109,6 +125,10 @@ func Run(ctx context.Context, getenv func(string) string, arch string, stderr io
 	}
 	if len(missing) > 0 {
 		return fail("missing required environment: %s", strings.Join(missing, ", "))
+	}
+	useSSL, err := ParseUseSSL(useSSLRaw)
+	if err != nil {
+		return fail("S3_USE_SSL (Secret %s key useSSL): %v", "functions-s3-read", err)
 	}
 	dest := getenv("FETCH_DEST")
 	if dest == "" {
@@ -121,7 +141,7 @@ func Run(ctx context.Context, getenv func(string) string, arch string, stderr io
 
 	c, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(ak, sk, ""),
-		Secure: getenv("S3_USE_SSL") == "true",
+		Secure: useSSL,
 		Region: "us-east-1", // avoid a GetBucketLocation round trip
 	})
 	if err != nil {

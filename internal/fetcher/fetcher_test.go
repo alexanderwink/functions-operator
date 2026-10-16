@@ -166,6 +166,41 @@ func TestRunMissingArchETag(t *testing.T) {
 	}
 }
 
+func TestParseUseSSL(t *testing.T) {
+	for in, want := range map[string]bool{"true": true, "false": false, "1": true, "0": false, "TRUE": true, "False": false} {
+		if got, err := ParseUseSSL(in); err != nil || got != want {
+			t.Errorf("ParseUseSSL(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "yes", "on", "tru"} {
+		if _, err := ParseUseSSL(in); err == nil {
+			t.Errorf("ParseUseSSL(%q) succeeded; want error", in)
+		}
+	}
+}
+
+func TestRunUseSSL(t *testing.T) {
+	srv := stubS3(t)
+	for _, tc := range []struct {
+		val, wantErr string
+	}{
+		{"", "S3_USE_SSL"},
+		{"yes", `useSSL "yes" is not a boolean`},
+	} {
+		env := baseEnv(t, srv)
+		env["S3_USE_SSL"] = tc.val
+		code, stderr, _ := runEnv(t, env, "amd64")
+		if code != 1 || !strings.Contains(stderr, tc.wantErr) {
+			t.Errorf("S3_USE_SSL=%q: code %d stderr %q; want 1 mentioning %q", tc.val, code, stderr, tc.wantErr)
+		}
+	}
+	env := baseEnv(t, srv)
+	env["S3_USE_SSL"] = "0"
+	if code, stderr, _ := runEnv(t, env, "amd64"); code != 0 {
+		t.Errorf("S3_USE_SSL=0: code %d: %s", code, stderr)
+	}
+}
+
 func TestRunMissingConfig(t *testing.T) {
 	code, stderr, _ := runEnv(t, map[string]string{}, "amd64")
 	if code != 1 || stderr == "" {

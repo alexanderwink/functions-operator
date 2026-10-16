@@ -51,6 +51,7 @@ import (
 
 	functionsv1alpha1 "github.com/alexanderwink/functions-operator/api/v1alpha1"
 	"github.com/alexanderwink/functions-operator/internal/controller"
+	"github.com/alexanderwink/functions-operator/internal/fetcher"
 	"github.com/alexanderwink/functions-operator/internal/resources"
 	"github.com/alexanderwink/functions-operator/internal/source"
 	// +kubebuilder:scaffold:imports
@@ -306,18 +307,33 @@ func newS3Client(cfg *rest.Config, ns string) (*minio.Client, error) {
 	if err := c.Get(ctx, key, sec); err != nil {
 		return nil, fmt.Errorf("reading Secret %s (create it with keys endpoint, accessKey, secretKey, useSSL): %w", key, err)
 	}
+	endpoint, opts, err := s3Options(sec.Data)
+	if err != nil {
+		return nil, fmt.Errorf("secret %s: %w", key, err)
+	}
+	return minio.New(endpoint, opts)
+}
+
+// s3Options validates the functions-s3-read Secret data: endpoint, accessKey,
+// secretKey and useSSL are all required, and useSSL is parsed exactly as the
+// fetcher parses it (fetcher.ParseUseSSL).
+func s3Options(data map[string][]byte) (string, *minio.Options, error) {
 	var missing []string
-	for _, k := range []string{"endpoint", "accessKey", "secretKey"} {
-		if len(sec.Data[k]) == 0 {
+	for _, k := range []string{"endpoint", "accessKey", "secretKey", "useSSL"} {
+		if len(data[k]) == 0 {
 			missing = append(missing, k)
 		}
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("secret %s is missing keys: %s", key, strings.Join(missing, ", "))
+		return "", nil, fmt.Errorf("missing keys: %s", strings.Join(missing, ", "))
 	}
-	return minio.New(string(sec.Data["endpoint"]), &minio.Options{
-		Creds:  credentials.NewStaticV4(string(sec.Data["accessKey"]), string(sec.Data["secretKey"]), ""),
-		Secure: string(sec.Data["useSSL"]) == "true",
+	useSSL, err := fetcher.ParseUseSSL(string(data["useSSL"]))
+	if err != nil {
+		return "", nil, err
+	}
+	return string(data["endpoint"]), &minio.Options{
+		Creds:  credentials.NewStaticV4(string(data["accessKey"]), string(data["secretKey"]), ""),
+		Secure: useSSL,
 		Region: "us-east-1", // same as the fetcher; avoids GetBucketLocation
-	})
+	}, nil
 }
