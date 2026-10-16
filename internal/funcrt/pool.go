@@ -95,9 +95,13 @@ func (p *Pool) Wait() { p.wg.Wait() }
 //
 // The invocation deadline is now+Timeout, so time spent queued counts against
 // the timeout. If the deadline passes or ctx is done before a worker takes the
-// invocation, it is never dispatched and Invoke returns 504 promptly. If ctx is
-// done while the invocation is running, Invoke returns 504 immediately; the
-// worker still finishes (or, from Task 3, is killed at the deadline).
+// invocation, it is never dispatched and Invoke returns 504 promptly. Once
+// dispatched, Invoke returns 504 at the deadline (or as soon as ctx is done)
+// even if the worker never answers; stopping the runaway process is the
+// worker's job (Task 3).
+//
+// Invoke alone maintains the Queued and InFlight gauges, so they cannot leak
+// whatever happens to the invocation inside a worker.
 func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
 	deadline := time.Now().Add(p.cfg.Timeout)
 	inv := newInvocation(ctx, payload, deadline)
@@ -108,7 +112,6 @@ func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
 	p.queued.Add(1)
 	select {
 	case p.queue <- inv:
-		// The receiving worker has incremented inFlight (see take).
 		p.queued.Add(-1)
 	case <-timer.C:
 		p.queued.Add(-1)
@@ -118,12 +121,33 @@ func (p *Pool) Invoke(ctx context.Context, payload []byte) Result {
 		return cancelledResult(ctx.Err())
 	}
 
+	p.inFlight.Add(1)
+	defer p.inFlight.Add(-1)
 	select {
 	case res := <-inv.result:
 		return res
+	case <-timer.C:
+		return timeoutResult("invocation timed out")
 	case <-ctx.Done():
 		return cancelledResult(ctx.Err())
 	}
+}
+
+// requeue hands inv back to the queue after a worker took it but could not
+// run it (its /next poll or the worker went away). It gives up, completing inv
+// with 504, at the deadline or when the caller's ctx is done.
+func (p *Pool) requeue(inv *invocation) {
+	go func() {
+		timer := time.NewTimer(time.Until(inv.deadline))
+		defer timer.Stop()
+		select {
+		case p.queue <- inv:
+		case <-timer.C:
+			inv.complete(timeoutResult("invocation timed out while queued"))
+		case <-inv.ctx.Done():
+			inv.complete(cancelledResult(inv.ctx.Err()))
+		}
+	}()
 }
 
 // Ready reports whether at least one worker's bootstrap has polled /next.
@@ -136,7 +160,7 @@ func (p *Pool) Ready() bool {
 	return false
 }
 
-// InFlight is the number of invocations currently held by a worker.
+// InFlight is the number of dispatched invocations whose Invoke is still waiting.
 func (p *Pool) InFlight() int { return int(p.inFlight.Load()) }
 
 // Queued is the number of invocations waiting for an idle worker.
@@ -156,7 +180,6 @@ type invocation struct {
 	result   chan Result // buffered(1): completing never blocks, even if Invoke gave up
 
 	once sync.Once
-	pool *Pool // set when a worker takes it; used to account inFlight
 }
 
 func newInvocation(ctx context.Context, payload []byte, deadline time.Time) *invocation {
@@ -171,12 +194,7 @@ func newInvocation(ctx context.Context, payload []byte, deadline time.Time) *inv
 
 // complete delivers res to the waiting Invoke. Only the first call has effect.
 func (inv *invocation) complete(res Result) {
-	inv.once.Do(func() {
-		if inv.pool != nil {
-			inv.pool.inFlight.Add(-1)
-		}
-		inv.result <- res
-	})
+	inv.once.Do(func() { inv.result <- res })
 }
 
 // newRequestID returns a random RFC 4122 version 4 UUID.

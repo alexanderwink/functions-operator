@@ -39,6 +39,7 @@ type worker struct {
 
 	mu      sync.Mutex
 	current *invocation // invocation handed out by /next and not yet answered
+	closed  bool        // set at shutdown; no new invocation may become current
 }
 
 func (w *worker) addr() string { return fmt.Sprintf("127.0.0.1:%d", w.port) }
@@ -85,9 +86,18 @@ func (w *worker) run(ctx context.Context) {
 
 	_ = srv.Close()
 	<-served
-	if inv := w.takeCurrent(""); inv != nil {
-		inv.complete(Result{Status: http.StatusBadGateway, Payload: errorPayload("Runtime.Shutdown", "funcrt is shutting down")})
+	w.mu.Lock()
+	w.closed = true
+	inv := w.current
+	w.current = nil
+	w.mu.Unlock()
+	if inv != nil {
+		inv.complete(shutdownResult())
 	}
+}
+
+func shutdownResult() Result {
+	return Result{Status: http.StatusBadGateway, Payload: errorPayload("Runtime.Shutdown", "funcrt is shutting down")}
 }
 
 // runProcess starts one bootstrap process and blocks until it exits or ctx is
@@ -147,18 +157,18 @@ func (w *worker) handler() http.Handler {
 // bootstrap.
 func (w *worker) handleNext(rw http.ResponseWriter, r *http.Request) {
 	w.ready.Store(true)
-	if prev := w.takeCurrent(""); prev != nil {
-		// The runtime asked for more work without answering; it can't anymore.
-		prev.complete(Result{Status: http.StatusBadGateway, Payload: errorPayload("Runtime.NoResponse", "runtime requested next invocation without responding")})
-	}
+	// A /next while an invocation is outstanding means the runtime will never
+	// answer it (or a stale poll from a killed process raced a new one).
+	w.failCurrent(noResponseResult())
 
 	inv, ok := w.take(r.Context())
 	if !ok {
 		return
 	}
-	w.mu.Lock()
-	w.current = inv
-	w.mu.Unlock()
+	if !w.setCurrent(inv) {
+		w.pool.requeue(inv)
+		return
+	}
 
 	h := rw.Header()
 	for k, v := range w.nextHeaders(inv) {
@@ -178,8 +188,11 @@ func (w *worker) take(ctx context.Context) (*invocation, bool) {
 		case <-ctx.Done():
 			return nil, false
 		case inv := <-w.pool.queue:
-			inv.pool = w.pool
-			w.pool.inFlight.Add(1)
+			if ctx.Err() != nil {
+				// select picked the queue although our poll is gone.
+				w.pool.requeue(inv)
+				return nil, false
+			}
 			if !time.Now().Before(inv.deadline) {
 				inv.complete(timeoutResult("invocation timed out while queued"))
 				continue
@@ -199,6 +212,35 @@ func (w *worker) nextHeaders(inv *invocation) http.Header {
 	h.Set("Lambda-Runtime-Deadline-Ms", strconv.FormatInt(inv.deadline.UnixMilli(), 10))
 	h.Set("Lambda-Runtime-Invoked-Function-Arn", w.pool.functionARN())
 	return h
+}
+
+// setCurrent makes inv the in-flight invocation, completing any invocation it
+// replaces with 502. It returns false (leaving inv untouched) if the worker
+// has shut down.
+func (w *worker) setCurrent(inv *invocation) bool {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return false
+	}
+	prev := w.current
+	w.current = inv
+	w.mu.Unlock()
+	if prev != nil {
+		prev.complete(noResponseResult())
+	}
+	return true
+}
+
+// failCurrent completes and clears the in-flight invocation, if any.
+func (w *worker) failCurrent(res Result) {
+	if inv := w.takeCurrent(""); inv != nil {
+		inv.complete(res)
+	}
+}
+
+func noResponseResult() Result {
+	return Result{Status: http.StatusBadGateway, Payload: errorPayload("Runtime.NoResponse", "runtime requested another invocation without answering this one")}
 }
 
 // takeCurrent clears and returns the in-flight invocation if its id matches
