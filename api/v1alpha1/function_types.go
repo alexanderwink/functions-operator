@@ -77,6 +77,13 @@ type Scaling struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Max int32 `json:"max"`
+
+	// scaledownPeriodSeconds is how long a service stays scaled up after its
+	// last request before scaling down (to min).
+	// +kubebuilder:default=300
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ScaledownPeriodSeconds *int32 `json:"scaledownPeriodSeconds,omitempty"`
 }
 
 // FunctionSpec defines the desired state of Function

@@ -270,6 +270,14 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
+                  scaledownPeriodSeconds:
+                    default: 300
+                    description: |-
+                      scaledownPeriodSeconds is how long a service stays scaled up after its
+                      last request before scaling down (to min).
+                    format: int32
+                    minimum: 0
+                    type: integer
                 type: object
               schedule:
                 description: schedule is a cron expression (jobs only).

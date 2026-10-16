@@ -61,9 +61,12 @@ func Hosts(name, ns string) []string {
 
 // HTTPScaledObject builds the KEDA HTTP add-on object (http.keda.sh/v1alpha1).
 func HTTPScaledObject(fn *v1alpha1.Function) *unstructured.Unstructured {
-	min, max := int64(0), int64(10)
+	min, max, scaledown := int64(0), int64(10), defaultScaledownSeconds
 	if s := fn.Spec.Scaling; s != nil {
 		min, max = int64(s.Min), int64(s.Max)
+		if s.ScaledownPeriodSeconds != nil {
+			scaledown = int64(*s.ScaledownPeriodSeconds)
+		}
 	}
 	hosts := Hosts(fn.Name, fn.Namespace)
 	hs := make([]any, len(hosts))
@@ -85,7 +88,7 @@ func HTTPScaledObject(fn *v1alpha1.Function) *unstructured.Unstructured {
 			},
 			"replicas":        map[string]any{"min": min, "max": max},
 			"scalingMetric":   map[string]any{"concurrency": map[string]any{"targetValue": concurrency(fn)}},
-			"scaledownPeriod": defaultScaledownSeconds,
+			"scaledownPeriod": scaledown,
 		},
 	}}
 }

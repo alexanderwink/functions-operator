@@ -235,3 +235,31 @@ func TestEnvReservedNames(t *testing.T) {
 		}
 	}
 }
+
+func TestScaledownPeriodDefaultAndMinimum(t *testing.T) {
+	f := newFn(FunctionTypeService)
+	f.Spec.Scaling = &Scaling{Min: 0, Max: 2}
+	if err := create(t, f); err != nil {
+		t.Fatal(err)
+	}
+	got := &Function{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(f), got); err != nil {
+		t.Fatal(err)
+	}
+	if p := got.Spec.Scaling.ScaledownPeriodSeconds; p == nil || *p != 300 {
+		t.Errorf("scaledownPeriodSeconds = %v, want 300", p)
+	}
+
+	zero := int32(0)
+	f = newFn(FunctionTypeService)
+	f.Spec.Scaling = &Scaling{Min: 0, Max: 2, ScaledownPeriodSeconds: &zero}
+	if err := create(t, f); err != nil {
+		t.Errorf("scaledownPeriodSeconds 0 should be accepted: %v", err)
+	}
+
+	if err := createRaw(t, rawSpec(map[string]any{
+		"scaling": map[string]any{"max": int64(2), "scaledownPeriodSeconds": int64(-1)},
+	})); err == nil {
+		t.Error("expected negative scaledownPeriodSeconds to be rejected")
+	}
+}

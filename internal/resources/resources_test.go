@@ -179,6 +179,24 @@ func TestHTTPScaledObject(t *testing.T) {
 	if tv != 4 {
 		t.Fatalf("target %d", tv)
 	}
+	if sd, _, _ := unstructuredInt(o.Object, "spec", "scaledownPeriod"); sd != 300 {
+		t.Fatalf("default scaledownPeriod %d", sd)
+	}
+}
+
+func TestHTTPScaledObjectScaledownPeriod(t *testing.T) {
+	f := fn()
+	p := int32(30)
+	f.Spec.Scaling = &v1alpha1.Scaling{Min: 0, Max: 3, ScaledownPeriodSeconds: &p}
+	o := HTTPScaledObject(f)
+	if sd, _, _ := unstructuredInt(o.Object, "spec", "scaledownPeriod"); sd != 30 {
+		t.Fatalf("scaledownPeriod %d", sd)
+	}
+	// Scaling set without the field (e.g. built without API defaulting) keeps the default.
+	f.Spec.Scaling.ScaledownPeriodSeconds = nil
+	if sd, _, _ := unstructuredInt(HTTPScaledObject(f).Object, "spec", "scaledownPeriod"); sd != 300 {
+		t.Fatalf("fallback scaledownPeriod %d", sd)
+	}
 }
 
 func TestDeploymentSelector(t *testing.T) {
