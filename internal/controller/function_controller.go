@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,9 +33,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	functionsv1alpha1 "github.com/alexanderwink/functions-operator/api/v1alpha1"
 	"github.com/alexanderwink/functions-operator/internal/resources"
@@ -329,6 +335,61 @@ func (r *FunctionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&batchv1.CronJob{}).
 		Owns(hso).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(podToFunction),
+			builder.WithPredicates(etagMismatchPredicate())).
 		Named("function").
 		Complete(r)
+}
+
+const (
+	fetcherContainerName = "fetcher"
+	fetcherExitETag      = 3
+	etagMismatchMessage  = "etag-mismatch"
+)
+
+// hasETagMismatch reports whether the pod's fetcher init container terminated
+// because the S3 object no longer matches the resolved ETag. After a kubelet
+// restart the termination sits in LastTerminationState.
+func hasETagMismatch(pod *corev1.Pod) bool {
+	for _, st := range pod.Status.InitContainerStatuses {
+		if st.Name != fetcherContainerName {
+			continue
+		}
+		for _, t := range []*corev1.ContainerStateTerminated{st.State.Terminated, st.LastTerminationState.Terminated} {
+			if t != nil && t.ExitCode == fetcherExitETag && strings.TrimSpace(t.Message) == etagMismatchMessage {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isETagMismatchPod(obj client.Object) bool {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return false
+	}
+	if _, ok := pod.Labels[resources.LabelFunction]; !ok {
+		return false
+	}
+	return hasETagMismatch(pod)
+}
+
+// etagMismatchPredicate passes Create and Update events of pods whose fetcher
+// reported an ETag mismatch; status changes arrive as updates.
+func etagMismatchPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return isETagMismatchPod(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return isETagMismatchPod(e.ObjectNew) },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+func podToFunction(_ context.Context, obj client.Object) []reconcile.Request {
+	name := obj.GetLabels()[resources.LabelFunction]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: name}}}
 }

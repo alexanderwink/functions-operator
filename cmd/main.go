@@ -216,6 +216,7 @@ func main() {
 			&appsv1.Deployment{}: {Label: ownedSel},
 			&corev1.Service{}:    {Label: ownedSel},
 			&batchv1.CronJob{}:   {Label: ownedSel},
+			&corev1.Pod{}:        {Label: ownedSel},
 		}},
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,

@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -33,6 +34,7 @@ const operatorNS = "functions-operator-system"
 
 var (
 	k8sClient client.Client
+	testCfg   *rest.Config
 	counter   atomic.Int64
 )
 
@@ -63,6 +65,7 @@ func TestMain(m *testing.M) {
 		return
 	}
 	defer func() { _ = env.Stop() }()
+	testCfg = cfg
 	k8sClient, err = client.New(cfg, client.Options{Scheme: s})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "client:", err)
