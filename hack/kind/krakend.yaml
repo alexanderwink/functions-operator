@@ -41,6 +41,21 @@ data:
           ]
         },
         {
+          "endpoint": "/dev/{p}",
+          "method": "GET",
+          "output_encoding": "no-op",
+          "timeout": "60s",
+          "input_query_strings": ["*"],
+          "input_headers": ["*"],
+          "backend": [
+            {
+              "host": ["http://go-hello-dev.team-a.svc.cluster.local:8080"],
+              "url_pattern": "/{p}",
+              "encoding": "no-op"
+            }
+          ]
+        },
+        {
           "endpoint": "/dotnet/{p}",
           "method": "GET",
           "output_encoding": "no-op",

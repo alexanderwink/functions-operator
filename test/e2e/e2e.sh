@@ -30,7 +30,7 @@ fail() { printf 'FAIL  %s: %s\n' "$1" "$2"; FAILED+=("$1"); }
 
 cleanup() {
   k -n "$E2E_NS" delete pod e2e-curl --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  k -n "$E2E_NS" delete job e2e-hey --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  k -n "$E2E_NS" delete job e2e-hey e2e-hey-rollout --ignore-not-found --wait=false >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -80,17 +80,36 @@ build_go() {
 
 upload() { "$ROOT/hack/kind/upload-sample.sh" "$@" >/dev/null; }
 
+# hey_all_200 <hey output>: logs the summary; fails (printing why) unless every response was a 200.
+hey_all_200() {
+  grep -E 'Requests/sec|^ +\[[0-9]+\]|^Error distribution' <<<"$1" | sed 's/^/      hey: /' >&2
+  grep -qE '^ +\[200\]' <<<"$1" || { echo "hey got no 200 responses"; return 1; }
+  if grep -E '^ +\[[0-9]{3}\]' <<<"$1" | grep -qv '\[200\]' || grep -q '^Error distribution' <<<"$1"; then
+    echo "non-200 responses or errors"; return 1
+  fi
+}
+
+# job_succeeded <name>: true once the Job in $E2E_NS has succeeded.
+job_succeeded() { [ "$(k -n "$E2E_NS" get job "$1" -o jsonpath='{.status.succeeded}')" = 1 ]; }
+
 # ---------------------------------------------------------------------------------------------------
 echo "== setup (context $CTX)"
 ARCH="$(k get nodes -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}')"
 log "node arch: $ARCH"
 k apply -f "$ROOT/hack/kind/krakend.yaml" >/dev/null
+# KrakenD reads its config only at start: stamp the ConfigMap's resourceVersion into the pod template, which
+# rolls KrakenD whenever the config changed (also when deploy-kind applied it earlier).
+cm_rv="$(k -n gateway get configmap krakend -o jsonpath='{.metadata.resourceVersion}')"
+if [ "$(k -n gateway get deploy krakend -o jsonpath='{.spec.template.metadata.annotations.e2e/krakend-config}')" != "$cm_rv" ]; then
+  k -n gateway patch deploy krakend --type=merge \
+    -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"e2e/krakend-config\":\"$cm_rv\"}}}}}" >/dev/null
+fi
 k apply -k "$ROOT/config/samples" >/dev/null
 # apply does not revert fields changed by a previous run's patch, so reset go-hello explicitly.
 k -n "$NS" patch function go-hello --type=merge -p '{"spec":{"source":{"version":"v1"}}}' >/dev/null
 k create namespace "$E2E_NS" --dry-run=client -o yaml | k apply -f - >/dev/null
 k -n "$E2E_NS" delete pod e2e-curl --ignore-not-found --wait=true >/dev/null
-k -n "$E2E_NS" delete job e2e-hey --ignore-not-found --wait=true >/dev/null
+k -n "$E2E_NS" delete job e2e-hey e2e-hey-rollout --ignore-not-found --wait=true >/dev/null
 k -n "$E2E_NS" run e2e-curl --image="$CURL_IMG" --restart=Never --command -- sleep 3600 >/dev/null
 if ! k -n "$E2E_NS" wait --for=condition=Ready pod/e2e-curl --timeout=120s >/dev/null ||
    ! k -n gateway rollout status deploy/krakend --timeout=120s >/dev/null; then
@@ -135,12 +154,8 @@ check3() {
   done
   log "max replicas during load: $max"
   local out; out="$(k -n "$E2E_NS" logs job/e2e-hey 2>/dev/null)"
-  grep -E 'Requests/sec|^ +\[[0-9]+\]|^Error distribution' <<<"$out" | sed 's/^/      hey: /'
   [ "$max" -gt 1 ] || { fail "$c" "replicas never exceeded 1 (max $max)"; return; }
-  grep -qE '^ +\[200\]' <<<"$out" || { fail "$c" "hey got no 200 responses"; return; }
-  if grep -E '^ +\[[0-9]{3}\]' <<<"$out" | grep -qv '\[200\]' || grep -q '^Error distribution' <<<"$out"; then
-    fail "$c" "non-200 responses or errors during scale-out"; return
-  fi
+  local why; why="$(hey_all_200 "$out")" || { fail "$c" "$why during scale-out"; return; }
   wait_for 120 scaled_to_zero go-hello || { fail "$c" "go-hello not back to 0 within 2 min (replicas=$(replicas go-hello))"; return; }
   pass "$c"
 }
@@ -208,6 +223,47 @@ check7() {
   pass "$c"
 }
 
+check8() {
+  local c="8 latest overwrite at zero replicas, via KrakenD" stamp="dev8-$RUN_ID" want
+  wait_for 60 ready go-hello-dev || { fail "$c" "go-hello-dev not Ready"; return; }
+  log "waiting for go-hello-dev to scale to zero"
+  wait_for 240 scaled_to_zero go-hello-dev || { fail "$c" "go-hello-dev replicas=$(replicas go-hello-dev), not 0"; return; }
+  build_go "$stamp" "$WORK/dev8" || { fail "$c" "build failed"; return; }
+  want="$(md5of "$WORK/dev8/linux-$ARCH/bootstrap")"
+  upload go-hello latest "$WORK/dev8" || { fail "$c" "upload failed"; return; }
+  # Immediately: the operator has not polled yet, so the pod is created with the old pinned ETag and
+  # its fetcher must hit the mismatch; the controller re-resolves and the request still succeeds.
+  local t0=$SECONDS
+  LAST="$(http "$GATEWAY/dev/x")"
+  log "GET /dev/x -> ${LAST:0:120} ($((SECONDS - t0))s; KrakenD timeout 60s)"
+  [[ "$LAST" == "200 "* && "$LAST" == *"\"build\":\"$stamp\""* ]] ||
+    { fail "$c" "want 200 with build $stamp, got '$LAST'"; return; }
+  [ $((SECONDS - t0)) -le 60 ] || { fail "$c" "took $((SECONDS - t0))s, longer than the KrakenD timeout"; return; }
+  [ "$(etag go-hello-dev)" = "$want" ] || log "note: status.etags.$ARCH is $(etag go-hello-dev), want $want"
+  pass "$c"
+}
+
+check9() {
+  local c="9 rollout v1 -> v2 under load"
+  k -n "$NS" patch function go-hello --type=merge -p '{"spec":{"source":{"version":"v1"}}}' >/dev/null
+  resolved() { [ "$(k -n "$NS" get function go-hello -o jsonpath='{.status.resolvedVersion}')" = "$1" ] && ready go-hello; }
+  wait_for 60 resolved v1 || { fail "$c" "go-hello did not resolve v1"; return; }
+  k -n "$E2E_NS" create job e2e-hey-rollout --image="$HEY_IMG" -- \
+    /usr/local/bin/hey -z 60s -c 10 "http://go-hello.$NS.svc.cluster.local:8080/load?sleep=50ms" >/dev/null
+  # Let load bring v1 pods up (cold start) before changing the version.
+  wait_for 60 body_matches "$GATEWAY/go/x" '"version":"v1"' || { fail "$c" "v1 not serving: '$LAST'"; return; }
+  sleep 10
+  log "replicas before rollout: $(replicas go-hello); switching to v2"
+  k -n "$NS" patch function go-hello --type=merge -p '{"spec":{"source":{"version":"v2"}}}' >/dev/null
+  wait_for 120 body_matches "$GATEWAY/go/x" '"version":"v2"' || { fail "$c" "v2 never served: '$LAST'"; return; }
+  log "v2 serving; rollout status:"
+  k -n "$NS" rollout status deploy/go-hello --timeout=120s 2>&1 | tail -1 | sed 's/^/      /'
+  wait_for 120 job_succeeded e2e-hey-rollout || { fail "$c" "hey job did not finish"; return; }
+  local why; why="$(hey_all_200 "$(k -n "$E2E_NS" logs job/e2e-hey-rollout 2>/dev/null)")" ||
+    { fail "$c" "$why during the rollout"; return; }
+  pass "$c"
+}
+
 echo "== checks"
 check1
 check2
@@ -216,6 +272,8 @@ check4
 check5
 check6
 check7
+check8
+check9
 
 echo
 if [ ${#FAILED[@]} -gt 0 ]; then
