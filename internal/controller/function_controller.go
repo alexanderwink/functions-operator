@@ -82,7 +82,11 @@ type FunctionReconciler struct {
 // +kubebuilder:rbac:groups=functions.pulsen.se,resources=functions/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;create;update;patch
+// Secrets: create cannot be restricted by name (the name is not known to
+// authorization before the object exists); everything else only on the S3
+// Secret. This also covers the operator's startup read of the source Secret.
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=create
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;update;patch,resourceNames=functions-s3-read
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=http.keda.sh,resources=httpscaledobjects,verbs=get;list;watch;create;update;patch;delete
