@@ -37,12 +37,21 @@ func run() int {
 		Env:          funcrt.BootstrapEnv(os.Environ()),
 		FunctionName: cfg.FunctionName,
 	})
-	if err := pool.Start(ctx); err != nil {
+	// In service mode the pool outlives the signal: on SIGTERM the server stops
+	// accepting and drains in-flight requests first, and only then are the
+	// bootstrap copies stopped. Sharing ctx would kill the copies immediately and
+	// answer every in-flight request with 502 during rollouts and scale-in.
+	poolCtx, stopPool := context.WithCancel(context.Background())
+	if cfg.Mode == funcrt.ModeJob {
+		poolCtx, stopPool = context.WithCancel(ctx)
+	}
+	if err := pool.Start(poolCtx); err != nil {
+		stopPool()
 		slog.Error("starting pool", "error", err)
 		return 1
 	}
 	defer func() {
-		stop()
+		stopPool()
 		pool.Wait()
 	}()
 
@@ -53,7 +62,7 @@ func run() int {
 			payload = funcrt.ScheduledEvent(time.Now(), eventID())
 		}
 		err := funcrt.RunJob(ctx, pool, payload)
-		stop() // shut the pool down
+		stopPool()
 		if err != nil {
 			slog.Error("job failed", "error", err)
 			return 1

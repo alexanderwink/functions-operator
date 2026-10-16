@@ -87,3 +87,53 @@ func TestServerBodyTooLarge(t *testing.T) {
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+// On shutdown the server must drain in-flight requests while the pool is still
+// running (cmd/funcrt stops the pool only after Run returns).
+func TestServerShutdownDrainsInFlight(t *testing.T) {
+	p := startPool(t, PoolConfig{Timeout: 10 * time.Second})
+	var s *Server
+	var base string
+	for range 20 {
+		port := 20000 + rand.IntN(30000)
+		s = NewServer(p, port, 20000+rand.IntN(30000))
+		if err := s.listen(); err == nil {
+			base = fmt.Sprintf("http://127.0.0.1:%d", port)
+			break
+		}
+		s = nil
+	}
+	if s == nil {
+		t.Fatal("listen failed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.serve(ctx) }()
+	waitFor(t, 10*time.Second, "ready", p.Ready)
+
+	type result struct {
+		code int
+		body string
+	}
+	res := make(chan result, 1)
+	go func() {
+		resp, err := http.Get(base + "/sleep/1s")
+		if err != nil {
+			res <- result{body: err.Error()}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		res <- result{resp.StatusCode, string(b)}
+	}()
+	waitFor(t, 5*time.Second, "request in flight", func() bool { return p.inFlight.Load() == 1 })
+	cancel()
+
+	r := <-res
+	if r.code != 200 || r.body != "/sleep/1s" {
+		t.Fatalf("in-flight request during shutdown: %d %q", r.code, r.body)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}

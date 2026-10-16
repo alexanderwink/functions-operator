@@ -6,7 +6,7 @@
 //	{"error":"boom"} returns errors.New("boom")
 //	{"exit":1}       calls os.Exit(1)
 //	{"rawPath":"/p",...} (an API Gateway v2 event) returns a response whose
-//	                 body is the rawPath
+//	                 body is the rawPath; rawPath "/sleep/<duration>" sleeps first
 //
 // With ECHO_INIT_FAIL=1 in the environment it exits with code 2 before calling
 // lambda.Start.
@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -38,6 +39,9 @@ func handle(_ context.Context, in json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	if req.RawPath != nil {
+		if d, err := time.ParseDuration(strings.TrimPrefix(*req.RawPath, "/sleep/")); err == nil {
+			time.Sleep(d)
+		}
 		return json.Marshal(events.APIGatewayV2HTTPResponse{StatusCode: 200, Body: *req.RawPath})
 	}
 	if req.Exit != nil {
