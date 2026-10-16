@@ -70,12 +70,32 @@ func TestPodTemplateResources(t *testing.T) {
 	if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet.Path != "/readyz" || c.ReadinessProbe.HTTPGet.Port.IntValue() != 9090 {
 		t.Fatalf("probe %+v", c.ReadinessProbe)
 	}
-	if *pt.Spec.TerminationGracePeriodSeconds != 35 {
+	if p := c.ReadinessProbe; p.PeriodSeconds != 1 || p.FailureThreshold != 3 || p.SuccessThreshold != 1 || p.TimeoutSeconds != 1 {
+		t.Fatalf("probe timing %+v; want period 1s, failureThreshold 3", p)
+	}
+	// 30s timeout + 5s pre-stop + 2s drain slack + 1s exit.
+	if *pt.Spec.TerminationGracePeriodSeconds != 38 {
 		t.Fatal(*pt.Spec.TerminationGracePeriodSeconds)
+	}
+	if pt.Spec.EnableServiceLinks == nil || *pt.Spec.EnableServiceLinks {
+		t.Fatal("enableServiceLinks not false")
 	}
 	init := pt.Spec.InitContainers[0]
 	if init.Name != "fetcher" || init.Command[0] != "/usr/local/bin/fetcher" {
 		t.Fatalf("%+v", init)
+	}
+	ir := init.Resources
+	if m := ir.Requests[corev1.ResourceMemory]; m.String() != "64Mi" {
+		t.Fatalf("fetcher memory request %s", m.String())
+	}
+	if m := ir.Limits[corev1.ResourceMemory]; m.String() != "64Mi" {
+		t.Fatalf("fetcher memory limit %s", m.String())
+	}
+	if c := ir.Requests[corev1.ResourceCPU]; c.String() != "50m" {
+		t.Fatalf("fetcher cpu request %s", c.String())
+	}
+	if _, ok := ir.Limits[corev1.ResourceCPU]; ok {
+		t.Fatal("fetcher cpu limit set")
 	}
 	ie := envMap(init)
 	if ie["FETCH_PREFIX"].Value != "f/v1" || ie["FETCH_ETAG_AMD64"].Value != "aaa" || ie["FETCH_BUCKET"].Value != "bkt" {
@@ -141,17 +161,18 @@ func TestPodTemplateArchAffinity(t *testing.T) {
 	}
 }
 
+// R18: namespace-qualified forms only, each with and without :8080.
 func TestHostsIncludesPortForms(t *testing.T) {
-	h := Hosts("f", "ns")
-	if len(h) != 8 {
-		t.Fatal(h)
+	got := strings.Join(Hosts("f", "ns"), ",")
+	want := "f.ns,f.ns:8080,f.ns.svc,f.ns.svc:8080,f.ns.svc.cluster.local,f.ns.svc.cluster.local:8080"
+	if got != want {
+		t.Fatalf("hosts = %s; want %s", got, want)
 	}
-	found := false
-	for _, x := range h {
-		found = found || x == "f.ns.svc.cluster.local:8080"
-	}
-	if !found {
-		t.Fatal(h)
+}
+
+func TestTerminationGraceRoundsUp(t *testing.T) {
+	if g := terminationGraceSeconds(1500 * time.Millisecond); g != 10 {
+		t.Fatalf("grace for 1.5s = %d; want 10 (ceil(1.5+5+2+1))", g)
 	}
 }
 

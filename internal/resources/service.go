@@ -50,8 +50,11 @@ func PublicService(fn *v1alpha1.Function, interceptorHost string) *corev1.Servic
 }
 
 // Hosts lists the host forms the interceptor should route to the function.
+// The bare name is deliberately absent (ruling R18): it would be ambiguous
+// across namespaces in the shared interceptor routing table. Callers use
+// <name>.<ns> or longer.
 func Hosts(name, ns string) []string {
-	bases := []string{name, name + "." + ns, name + "." + ns + ".svc", name + "." + ns + ".svc.cluster.local"}
+	bases := []string{name + "." + ns, name + "." + ns + ".svc", name + "." + ns + ".svc.cluster.local"}
 	out := make([]string, 0, 2*len(bases))
 	for _, b := range bases {
 		out = append(out, b, b+":8080")

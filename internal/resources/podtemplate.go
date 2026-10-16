@@ -5,8 +5,10 @@ package resources
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"sort"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -14,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/alexanderwink/functions-operator/api/v1alpha1"
+	"github.com/alexanderwink/functions-operator/internal/funcrt"
 	"github.com/alexanderwink/functions-operator/internal/source"
 )
 
@@ -86,7 +89,8 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 		mode = "job"
 	}
 	timeout := fn.Spec.Timeout.Duration
-	grace := int64(timeout.Seconds()) + 5
+	grace := terminationGraceSeconds(timeout)
+	noServiceLinks := false
 	uid := runtimeUID
 	nonRoot := true
 
@@ -132,6 +136,7 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 		},
 		Spec: corev1.PodSpec{
 			TerminationGracePeriodSeconds: &grace,
+			EnableServiceLinks:            &noServiceLinks,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:   &nonRoot,
 				RunAsUser:      &uid,
@@ -157,6 +162,14 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 				Env:             fetchEnv,
 				VolumeMounts:    []corev1.VolumeMount{task},
 				SecurityContext: containerSecurity(),
+				// No CPU limit, as for the main container.
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+					Requests: corev1.ResourceList{
+						corev1.ResourceMemory: resource.MustParse("64Mi"),
+						corev1.ResourceCPU:    resource.MustParse("50m"),
+					},
+				},
 			}},
 			Containers: []corev1.Container{{
 				Name:  "funcrt",
@@ -170,13 +183,29 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 						corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuM, resource.DecimalSI),
 					},
 				},
-				ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-					Path: "/readyz", Port: intstr.FromInt32(adminPort)}}},
+				// Probed every second so a cold start is not padded by the
+				// 10s default period while the interceptor holds the request.
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+						Path: "/readyz", Port: intstr.FromInt32(adminPort)}},
+					PeriodSeconds:    1,
+					TimeoutSeconds:   1,
+					SuccessThreshold: 1,
+					FailureThreshold: 3,
+				},
 				VolumeMounts:    []corev1.VolumeMount{task, tmp},
 				SecurityContext: containerSecurity(),
 			}},
 		},
 	}
+}
+
+// terminationGraceSeconds covers funcrt's shutdown: the pre-stop window, a
+// drain of up to the function timeout plus funcrt.DrainSlack, and a second for
+// stopping the bootstrap copies and exiting.
+func terminationGraceSeconds(timeout time.Duration) int64 {
+	d := timeout + funcrt.PreStopDelay + funcrt.DrainSlack + time.Second
+	return int64(math.Ceil(d.Seconds()))
 }
 
 func upper(s string) string {
