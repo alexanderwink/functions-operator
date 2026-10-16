@@ -3,6 +3,7 @@ package funcrt
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -98,13 +99,12 @@ func intVar(getenv func(string) string, name string, dst *int) error {
 
 // BootstrapEnv builds the bootstrap environment from environ (os.Environ
 // format): everything except FUNCRT_* and the variables funcrt sets itself,
-// plus the Lambda constants. The worker adds AWS_LAMBDA_RUNTIME_API.
+// plus the Lambda constants (AWS_REGION defaults to local only when unset). The worker adds AWS_LAMBDA_RUNTIME_API.
 func BootstrapEnv(environ []string) []string {
 	out := make([]string, 0, len(environ)+3)
 	for _, e := range environ {
 		switch {
 		case strings.HasPrefix(e, "FUNCRT_"),
-			strings.HasPrefix(e, "AWS_REGION="),
 			strings.HasPrefix(e, "LAMBDA_TASK_ROOT="),
 			strings.HasPrefix(e, "_HANDLER="),
 			strings.HasPrefix(e, "AWS_LAMBDA_RUNTIME_API="):
@@ -112,5 +112,8 @@ func BootstrapEnv(environ []string) []string {
 			out = append(out, e)
 		}
 	}
-	return append(out, "LAMBDA_TASK_ROOT=/var/task", "_HANDLER=bootstrap", "AWS_REGION=local")
+	if !slices.ContainsFunc(out, func(e string) bool { return strings.HasPrefix(e, "AWS_REGION=") }) {
+		out = append(out, "AWS_REGION=local")
+	}
+	return append(out, "LAMBDA_TASK_ROOT=/var/task", "_HANDLER=bootstrap")
 }

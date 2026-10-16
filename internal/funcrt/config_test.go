@@ -65,7 +65,7 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 
 func TestBootstrapEnv(t *testing.T) {
 	got := BootstrapEnv([]string{"PATH=/bin", "FUNCRT_MODE=job", "FUNCRT_PORT=1", "FOO=a=b", "AWS_REGION=eu-west-1", "AWS_LAMBDA_FUNCTION_NAME=fn"})
-	for _, w := range []string{"PATH=/bin", "FOO=a=b", "AWS_LAMBDA_FUNCTION_NAME=fn", "LAMBDA_TASK_ROOT=/var/task", "_HANDLER=bootstrap", "AWS_REGION=local"} {
+	for _, w := range []string{"PATH=/bin", "FOO=a=b", "AWS_LAMBDA_FUNCTION_NAME=fn", "LAMBDA_TASK_ROOT=/var/task", "_HANDLER=bootstrap", "AWS_REGION=eu-west-1"} {
 		if !slices.Contains(got, w) {
 			t.Errorf("missing %q in %v", w, got)
 		}
@@ -74,9 +74,15 @@ func TestBootstrapEnv(t *testing.T) {
 		if len(e) >= 7 && e[:7] == "FUNCRT_" {
 			t.Errorf("FUNCRT_ leaked: %s", e)
 		}
-		if e == "AWS_REGION=eu-west-1" {
-			t.Errorf("AWS_REGION not overridden")
-		}
+	}
+}
+
+func TestBootstrapEnvRegion(t *testing.T) {
+	if got := BootstrapEnv([]string{"AWS_REGION=eu-west-1"}); !slices.Contains(got, "AWS_REGION=eu-west-1") || slices.Contains(got, "AWS_REGION=local") {
+		t.Errorf("user region not kept: %v", got)
+	}
+	if got := BootstrapEnv(nil); !slices.Contains(got, "AWS_REGION=local") {
+		t.Errorf("default region missing: %v", got)
 	}
 }
 

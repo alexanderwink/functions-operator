@@ -41,7 +41,10 @@ func run() int {
 		slog.Error("starting pool", "error", err)
 		return 1
 	}
-	defer pool.Wait()
+	defer func() {
+		stop()
+		pool.Wait()
+	}()
 
 	switch cfg.Mode {
 	case funcrt.ModeJob:
