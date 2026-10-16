@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spike
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-backend
+  namespace: spike
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: echo-backend}
+  template:
+    metadata:
+      labels: {app: echo-backend}
+    spec:
+      containers:
+        - name: echo
+          image: ealen/echo-server:latest
+          ports:
+            - {containerPort: 80}
+          env:
+            - {name: PORT, value: "80"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-backend
+  namespace: spike
+spec:
+  selector: {app: echo-backend}
+  ports:
+    - {port: 80, targetPort: 80}
+---
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: echo
+  namespace: spike
+spec:
+  hosts:
+    - echo.spike.svc.cluster.local
+    - echo.spike.svc.cluster.local:8080
+  scaleTargetRef:
+    name: echo-backend
+    kind: Deployment
+    apiVersion: apps/v1
+    service: echo-backend
+    port: 80
+  replicas:
+    min: 0
+    max: 3
+  scaledownPeriod: 30
+  scalingMetric:
+    concurrency:
+      targetValue: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: spike
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
