@@ -21,7 +21,7 @@ const runtimeAPIPrefix = "/2018-06-01/runtime"
 
 // Restart backoff: a bootstrap that exited (crash, timeout kill, init failure)
 // is restarted after minRestartDelay, doubling on every further exit up to
-// maxRestartDelay. A successful invocation resets it.
+// maxRestartDelay. Any answered invocation (/response or /error) resets it.
 const (
 	minRestartDelay = 100 * time.Millisecond
 	maxRestartDelay = 10 * time.Second
@@ -380,12 +380,9 @@ func (w *worker) clearCurrentLocked() *invocation {
 }
 
 func (w *worker) handleResponse(rw http.ResponseWriter, r *http.Request) {
-	ok := w.finish(rw, r, func(body []byte) Result {
+	w.finish(rw, r, func(body []byte) Result {
 		return Result{Status: http.StatusOK, Payload: body}
 	})
-	if ok {
-		w.resetBackoff()
-	}
 }
 
 func (w *worker) handleError(rw http.ResponseWriter, r *http.Request) {
@@ -401,23 +398,25 @@ func (w *worker) handleError(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// finish completes the in-flight invocation named by the {id} path value. It
-// reports whether that invocation was in flight.
-func (w *worker) finish(rw http.ResponseWriter, r *http.Request, result func(body []byte) Result) bool {
+// finish completes the in-flight invocation named by the {id} path value.
+// Any answered invocation, success or handled error, shows the runtime is
+// healthy, so it resets the restart backoff. The reset happens before the
+// caller is woken, so callers never observe a stale backoff.
+func (w *worker) finish(rw http.ResponseWriter, r *http.Request, result func(body []byte) Result) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeStatus(rw, http.StatusBadRequest, "InvalidRequest", err.Error())
-		return false
+		return
 	}
 	id := r.PathValue("id")
 	inv := w.takeCurrent(id)
 	if inv == nil {
 		writeStatus(rw, http.StatusBadRequest, "InvalidRequestID", "unknown or already answered request id "+id)
-		return false
+		return
 	}
+	w.resetBackoff()
 	inv.complete(result(body))
 	writeStatus(rw, http.StatusAccepted, "", "")
-	return true
 }
 
 // handleInitError acknowledges /init/error before killing the process, so

@@ -154,3 +154,21 @@ func TestPoolBackoffResetsAfterSuccess(t *testing.T) {
 		t.Errorf("backoff after success = %v; want 100ms", got)
 	}
 }
+
+// A handled function error (/invocation/error) also resets the restart
+// backoff: the runtime is healthy (ruling R9).
+func TestPoolBackoffResetsAfterHandledError(t *testing.T) {
+	p := startPool(t, PoolConfig{Concurrency: 1, Timeout: 5 * time.Second})
+	w := p.workers[0]
+	for i := range 3 {
+		if r := invoke(t, p, `{"exit":1}`); r.Status != 502 {
+			t.Fatalf("crash %d: status = %d; want 502", i, r.Status)
+		}
+	}
+	if r := invoke(t, p, `{"error":"boom"}`); r.Status != 502 || errorType(t, r) == "Runtime.ExitError" {
+		t.Fatalf("handled error: status = %d, payload %s; want 502 handler error", r.Status, r.Payload)
+	}
+	if got := w.nextBackoff(); got != 100*time.Millisecond {
+		t.Errorf("backoff after handled error = %v; want 100ms", got)
+	}
+}

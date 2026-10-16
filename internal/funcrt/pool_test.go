@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -31,6 +32,10 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) int {
+	// Restart, timeout and init-failure paths log by design; keep test
+	// output readable.
+	slog.SetDefault(slog.New(slog.DiscardHandler))
+
 	dir, err := os.MkdirTemp("", "funcrt-test-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mkdtemp:", err)
