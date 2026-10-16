@@ -26,7 +26,7 @@ type PoolConfig struct {
 	Concurrency  int           // number of bootstrap copies; < 1 means DefaultConcurrency
 	Timeout      time.Duration // per-invocation timeout, counted from Invoke; <= 0 means DefaultTimeout
 	BasePort     int           // worker i listens on 127.0.0.1:BasePort+i
-	Env          []string      // extra env for bootstrap (user env + AWS_LAMBDA_*)
+	Env          []string      // complete bootstrap environment (see BootstrapEnv); not inherited from the process
 	FunctionName string
 }
 

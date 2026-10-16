@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -137,7 +138,7 @@ func (w *worker) resetBackoff() {
 func (w *worker) runProcess(ctx context.Context) error {
 	cfg := w.pool.cfg
 	cmd := exec.Command(cfg.Bootstrap)
-	cmd.Env = append(append(os.Environ(), cfg.Env...), "AWS_LAMBDA_RUNTIME_API="+w.addr())
+	cmd.Env = append(slices.Clone(cfg.Env), "AWS_LAMBDA_RUNTIME_API="+w.addr())
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	// Own process group so the whole tree can be killed (see killProcess).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
