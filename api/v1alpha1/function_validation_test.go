@@ -263,3 +263,49 @@ func TestScaledownPeriodDefaultAndMinimum(t *testing.T) {
 		t.Error("expected negative scaledownPeriodSeconds to be rejected")
 	}
 }
+
+func namedFn(name string, t FunctionType) *Function {
+	f := newFn(t)
+	f.Name = name
+	if t == FunctionTypeJob {
+		f.Spec.Schedule = "*/5 * * * *"
+	}
+	return f
+}
+
+func TestNameLengthLimits(t *testing.T) {
+	name := func(prefix string, n int) string {
+		b := []byte(prefix)
+		for len(b) < n {
+			b = append(b, 'a')
+		}
+		return string(b)
+	}
+	for _, tc := range []struct {
+		name string
+		typ  FunctionType
+		ok   bool
+	}{
+		{name("s55-", 55), FunctionTypeService, true},
+		{name("s56-", 56), FunctionTypeService, false},
+		{name("j52-", 52), FunctionTypeJob, true},
+		{name("j53-", 53), FunctionTypeJob, false},
+	} {
+		err := create(t, namedFn(tc.name, tc.typ))
+		if tc.ok && err != nil {
+			t.Errorf("%s %q (%d chars): rejected: %v", tc.typ, tc.name, len(tc.name), err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%s %q (%d chars): accepted; want rejected", tc.typ, tc.name, len(tc.name))
+		}
+	}
+}
+
+func TestNameMustStartWithLetter(t *testing.T) {
+	if err := create(t, namedFn("1abc", FunctionTypeService)); err == nil {
+		t.Error("name starting with a digit accepted; want rejected (DNS-1035)")
+	}
+	if err := create(t, namedFn("abc-1", FunctionTypeService)); err != nil {
+		t.Errorf("abc-1 rejected: %v", err)
+	}
+}

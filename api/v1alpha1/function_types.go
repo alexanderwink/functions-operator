@@ -178,6 +178,12 @@ type FunctionStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Function is the Schema for the functions API
+//
+// The name becomes a Service name (DNS-1035: must start with a letter) and,
+// for services, <name>-backend (<= 63 characters); a job's CronJob name must
+// leave room for the Job suffix (<= 52 characters).
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name must start with a letter and contain only lowercase letters, digits and '-' (DNS-1035)"
+// +kubebuilder:validation:XValidation:rule="self.spec.type == 'job' ? self.metadata.name.size() <= 52 : self.metadata.name.size() <= 55",message="metadata.name must be at most 55 characters for services (<name>-backend <= 63) and 52 for jobs"
 type Function struct {
 	metav1.TypeMeta `json:",inline"`
 
