@@ -1,9 +1,0 @@
-apiVersion: functions.pulsen.se/v1alpha1
-kind: Function
-metadata:
-  labels:
-    app.kubernetes.io/name: functions-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: function-sample
-spec:
-  # TODO(user): Add fields here

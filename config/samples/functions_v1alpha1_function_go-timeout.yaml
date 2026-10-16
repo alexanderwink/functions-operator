@@ -1,0 +1,18 @@
+# Short timeout: an invocation running longer than 2s is answered with 504.
+apiVersion: functions.pulsen.se/v1alpha1
+kind: Function
+metadata:
+  name: go-hello-timeout
+spec:
+  type: service
+  source:
+    bucket: functions
+    key: go-hello
+    version: v1
+  architectures: [arm64]
+  memory: 64Mi
+  timeout: 2s
+  scaling:
+    min: 0
+    max: 1
+    scaledownPeriodSeconds: 30

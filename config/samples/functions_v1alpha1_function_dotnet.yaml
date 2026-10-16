@@ -1,0 +1,17 @@
+# .NET (Native AOT) sample service: s3://functions/dotnet-hello/v1/linux-<arch>/bootstrap
+apiVersion: functions.pulsen.se/v1alpha1
+kind: Function
+metadata:
+  name: dotnet-hello
+spec:
+  type: service
+  source:
+    bucket: functions
+    version: v1
+  architectures: [arm64]
+  memory: 128Mi
+  timeout: 30s
+  scaling:
+    min: 0
+    max: 2
+    scaledownPeriodSeconds: 30

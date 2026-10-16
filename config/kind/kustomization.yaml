@@ -1,0 +1,15 @@
+# Local kind deployment (make deploy-kind): the default install plus the locally loaded images.
+# Images are loaded with `kind load image-archive` and must not be pulled.
+resources:
+- ../default
+
+images:
+- name: controller
+  newName: localhost/functions-operator
+  newTag: dev
+
+patches:
+- path: manager_kind_patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager

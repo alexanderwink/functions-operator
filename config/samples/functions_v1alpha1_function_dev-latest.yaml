@@ -1,0 +1,18 @@
+# Follows s3://functions/go-hello/latest: the operator re-checks the ETag (default every 30s)
+# and rolls the pods when the object changes.
+apiVersion: functions.pulsen.se/v1alpha1
+kind: Function
+metadata:
+  name: go-hello-dev
+spec:
+  type: service
+  source:
+    bucket: functions
+    key: go-hello
+    version: latest
+  architectures: [arm64]
+  memory: 64Mi
+  scaling:
+    min: 0
+    max: 2
+    scaledownPeriodSeconds: 30

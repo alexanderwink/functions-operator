@@ -1,0 +1,110 @@
+# KrakenD API gateway in front of the sample functions (ns gateway), as in production:
+# KrakenD -> http://<fn>.<ns>.svc.cluster.local:8080 (ExternalName -> KEDA HTTP interceptor) -> pods.
+#
+# Image: the official `krakend` image. devopsfaith/krakend is no longer updated (last tag 2.9.4).
+#
+# timeout must exceed cold start + function timeout; KrakenD's default (2s) is shorter than a cold
+# start from zero. no-op encoding passes status code, headers and body through unchanged, so 502/504
+# from the function reach the caller as-is.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: krakend
+  namespace: gateway
+data:
+  krakend.json: |
+    {
+      "$schema": "https://www.krakend.io/schema/v2.13/krakend.json",
+      "version": 3,
+      "name": "functions",
+      "port": 8080,
+      "timeout": "60s",
+      "endpoints": [
+        {
+          "endpoint": "/go/{p}",
+          "method": "GET",
+          "output_encoding": "no-op",
+          "timeout": "60s",
+          "input_query_strings": ["*"],
+          "input_headers": ["*"],
+          "backend": [
+            {
+              "host": ["http://go-hello.team-a.svc.cluster.local:8080"],
+              "url_pattern": "/{p}",
+              "encoding": "no-op"
+            }
+          ]
+        },
+        {
+          "endpoint": "/dotnet/{p}",
+          "method": "GET",
+          "output_encoding": "no-op",
+          "timeout": "60s",
+          "input_query_strings": ["*"],
+          "input_headers": ["*"],
+          "backend": [
+            {
+              "host": ["http://dotnet-hello.team-a.svc.cluster.local:8080"],
+              "url_pattern": "/{p}",
+              "encoding": "no-op"
+            }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: krakend
+  namespace: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: krakend}
+  template:
+    metadata:
+      labels: {app: krakend}
+    spec:
+      # KrakenD treats KRAKEND_* env vars as config overrides; the Service link variables Kubernetes
+      # injects for the "krakend" Service (KRAKEND_PORT=tcp://...) would break the port setting.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: krakend
+          image: docker.io/library/krakend:2.13.11
+          args: ["run", "-c", "/etc/krakend/krakend.json"]
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /__health, port: 8080}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/krakend}
+      volumes:
+        - name: config
+          configMap: {name: krakend}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: krakend
+  namespace: gateway
+spec:
+  selector: {app: krakend}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}

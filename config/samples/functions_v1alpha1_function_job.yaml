@@ -1,0 +1,15 @@
+# Scheduled job: runs go-hello every minute with an EventBridge Scheduled Event; it logs "scheduled tick".
+apiVersion: functions.pulsen.se/v1alpha1
+kind: Function
+metadata:
+  name: go-hello-job
+spec:
+  type: job
+  schedule: "*/1 * * * *"
+  source:
+    bucket: functions
+    key: go-hello
+    version: v1
+  architectures: [arm64]
+  memory: 64Mi
+  timeout: 30s

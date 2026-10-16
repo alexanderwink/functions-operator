@@ -2,7 +2,7 @@
 # Upload a sample function's bootstrap binaries to the local kind MinIO.
 #   usage: upload-sample.sh <name> <version> <dir>
 # <dir> contains linux-<arch>/bootstrap; each is uploaded to
-#   functions/<name>/{<version>,latest}/linux-<arch>/bootstrap
+#   functions/<name>/{<version>,latest}/linux-<arch>/bootstrap  (only latest when <version> is "latest")
 # Approach: a short-lived pod in the cluster (image bitnamilegacy/minio, which bundles `mc`) with the
 # binaries streamed in via `kubectl cp`. No port-forward or host networking needed, so it works the same
 # on podman/macOS and Linux.
@@ -30,7 +30,8 @@ for f in "${dirs[@]}"; do
   arch=$(basename "$(dirname "$f")")
   # kubectl cp needs tar in the image; stream through exec instead.
   "${K[@]}" exec -i "$POD" -- sh -c "cat > /tmp/bootstrap-$arch" < "$f"
-  for ver in "$VERSION" latest; do
+  vers=("$VERSION"); [ "$VERSION" = latest ] || vers+=(latest)
+  for ver in "${vers[@]}"; do
     key="local/functions/$NAME/$ver/$arch/bootstrap"
     "${K[@]}" exec "$POD" -- mc cp "/tmp/bootstrap-$arch" "$key" >/dev/null
     echo "uploaded $key"

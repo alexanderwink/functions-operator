@@ -308,6 +308,44 @@ samples: ## Build sample bootstrap binaries for all ARCHES into samples/out (usa
 	done
 
 .PHONY: upload-samples
-upload-samples: ## Upload built samples to the kind MinIO (run `make samples` first).
+upload-samples: ## Upload built samples to the kind MinIO (builds them with `make samples` if samples/out is missing).
+	@[ -f samples/out/go-hello/linux-$(NATIVE_ARCH)/bootstrap ] && [ -f samples/out/dotnet-hello/linux-$(NATIVE_ARCH)/bootstrap ] || $(MAKE) samples
 	hack/kind/upload-sample.sh go-hello $(SAMPLE_VERSION) samples/out/go-hello
 	hack/kind/upload-sample.sh dotnet-hello $(SAMPLE_VERSION) samples/out/dotnet-hello
+
+##@ Deploy to kind and end-to-end test
+
+KIND_CONTEXT ?= kind-functions
+KIND_IMG ?= localhost/functions-operator:dev
+HEY_IMG ?= localhost/hey:v0.1.5
+OPERATOR_NS ?= functions-operator-system
+KK = "$(KUBECTL)" --context $(KIND_CONTEXT)
+
+.PHONY: deploy-kind
+deploy-kind: manifests kustomize ## Build and load operator, runtime and hey images into kind; deploy operator, S3 secret, samples (ns team-a) and KrakenD (ns gateway).
+	$(MAKE) kind-load IMG=$(KIND_IMG)
+	$(MAKE) runtime-image-kind
+	$(MAKE) kind-load IMG=$(HEY_IMG) KIND_DOCKERFILE=hack/kind/hey/Dockerfile
+	$(KK) create namespace $(OPERATOR_NS) --dry-run=client -o yaml | $(KK) apply -f -
+	$(KK) -n $(OPERATOR_NS) create secret generic functions-s3-read \
+	  --from-literal=endpoint=minio.minio.svc.cluster.local:9000 --from-literal=useSSL=false \
+	  --from-literal=accessKey=minioadmin --from-literal=secretKey=minioadmin \
+	  --dry-run=client -o yaml | $(KK) apply -f -
+	"$(KUSTOMIZE)" build config/kind | $(KK) apply -f -
+	@# The image tags are fixed (:dev), so restart to pick up freshly loaded images.
+	$(KK) -n $(OPERATOR_NS) rollout restart deploy/functions-operator-controller-manager
+	$(KK) -n $(OPERATOR_NS) rollout status deploy/functions-operator-controller-manager --timeout=180s
+	$(KK) create namespace team-a --dry-run=client -o yaml | $(KK) apply -f -
+	$(KK) apply -k config/samples
+	$(KK) apply -f hack/kind/krakend.yaml
+	$(KK) -n gateway rollout status deploy/krakend --timeout=180s
+
+.PHONY: undeploy-kind
+undeploy-kind: kustomize ## Remove samples, KrakenD and the operator from kind.
+	-$(KK) delete -k config/samples --ignore-not-found
+	-$(KK) delete -f hack/kind/krakend.yaml --ignore-not-found
+	-"$(KUSTOMIZE)" build config/kind | $(KK) delete --ignore-not-found -f -
+
+.PHONY: e2e
+e2e: ## Run the kind end-to-end suite (needs kind-up, deploy-kind, upload-samples).
+	KUBE_CONTEXT=$(KIND_CONTEXT) HEY_IMG=$(HEY_IMG) test/e2e/e2e.sh

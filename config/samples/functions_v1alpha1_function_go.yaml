@@ -1,0 +1,19 @@
+# Go sample service: s3://functions/go-hello/v1/linux-<arch>/bootstrap
+# architectures: [arm64] matches the local kind node (Apple silicon); use amd64 on x86 hosts.
+apiVersion: functions.pulsen.se/v1alpha1
+kind: Function
+metadata:
+  name: go-hello
+spec:
+  type: service
+  source:
+    bucket: functions
+    version: v1
+  architectures: [arm64]
+  memory: 64Mi
+  timeout: 30s
+  concurrency: 4
+  scaling:
+    min: 0
+    max: 5
+    scaledownPeriodSeconds: 30

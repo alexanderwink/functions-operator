@@ -1,4 +1,9 @@
 ## Append samples of your project ##
+namespace: team-a
 resources:
-- functions_v1alpha1_function.yaml
+- functions_v1alpha1_function_go.yaml
+- functions_v1alpha1_function_dotnet.yaml
+- functions_v1alpha1_function_job.yaml
+- functions_v1alpha1_function_dev-latest.yaml
+- functions_v1alpha1_function_go-timeout.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
