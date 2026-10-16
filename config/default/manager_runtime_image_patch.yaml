@@ -1,0 +1,6 @@
+# Runtime image for function pods (funcrt + fetcher). RUNTIME_IMG is a
+# placeholder that `make deploy` / `make deploy-kind` replace with
+# $(RUNTIME_IMG); when building this overlay by hand, substitute it yourself.
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --runtime-image=RUNTIME_IMG

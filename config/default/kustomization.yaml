@@ -39,6 +39,10 @@ patches:
 - path: manager_metrics_patch.yaml
   target:
     kind: Deployment
+# --runtime-image (required); `make deploy` substitutes RUNTIME_IMG.
+- path: manager_runtime_image_patch.yaml
+  target:
+    kind: Deployment
 
 # Uncomment the patches line if you enable Metrics and CertManager
 # [METRICS-WITH-CERTS] To enable metrics protected with certManager, uncomment the following line.

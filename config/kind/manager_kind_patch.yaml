@@ -1,7 +1,5 @@
-# Runtime image for function pods (funcrt + fetcher), loaded into kind by `make runtime-image-kind`.
-- op: add
-  path: /spec/template/spec/containers/0/args/-
-  value: --runtime-image=localhost/functions-runtime:dev
+# The runtime image (--runtime-image, from ../default) is substituted by
+# `make deploy-kind` with $(RUNTIME_IMG), loaded by `make runtime-image-kind`.
 - op: add
   path: /spec/template/spec/containers/0/imagePullPolicy
   value: IfNotPresent

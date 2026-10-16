@@ -63,36 +63,9 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# kubectl kuberc is disabled by default for test isolation; enable with:
-# - KUBECTL_KUBERC=true
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
-KIND_CLUSTER ?= functions-operator-test-e2e
-
-.PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
-	@case "$$($(KIND) get clusters)" in \
-		*"$(KIND_CLUSTER)"*) \
-			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
-		*) \
-			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
-	esac
-
+# The kind end-to-end suite is test/e2e/e2e.sh (see `make e2e` below).
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
-
-.PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+test-e2e: e2e ## Alias for `make e2e` (the kind suite in test/e2e/e2e.sh).
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -171,7 +144,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+	"$(KUSTOMIZE)" build config/default | sed 's|--runtime-image=RUNTIME_IMG|--runtime-image=$(RUNTIME_IMG)|' | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
@@ -331,7 +304,7 @@ deploy-kind: manifests kustomize ## Build and load operator, runtime and hey ima
 	  --from-literal=endpoint=minio.minio.svc.cluster.local:9000 --from-literal=useSSL=false \
 	  --from-literal=accessKey=minioadmin --from-literal=secretKey=minioadmin \
 	  --dry-run=client -o yaml | $(KK) apply -f -
-	"$(KUSTOMIZE)" build config/kind | $(KK) apply -f -
+	"$(KUSTOMIZE)" build config/kind | sed 's|--runtime-image=RUNTIME_IMG|--runtime-image=$(RUNTIME_IMG)|' | $(KK) apply -f -
 	@# The image tags are fixed (:dev), so restart to pick up freshly loaded images.
 	$(KK) -n $(OPERATOR_NS) rollout restart deploy/functions-operator-controller-manager
 	$(KK) -n $(OPERATOR_NS) rollout status deploy/functions-operator-controller-manager --timeout=180s

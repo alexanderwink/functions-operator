@@ -35,4 +35,4 @@ jobs:
       - name: Running Test e2e
         run: |
           go mod tidy
-          make test-e2e
+          make kind-up deploy-kind upload-samples test-e2e
