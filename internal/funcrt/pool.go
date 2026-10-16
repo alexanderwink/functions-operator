@@ -97,8 +97,8 @@ func (p *Pool) Wait() { p.wg.Wait() }
 // the timeout. If the deadline passes or ctx is done before a worker takes the
 // invocation, it is never dispatched and Invoke returns 504 promptly. Once
 // dispatched, Invoke returns 504 at the deadline (or as soon as ctx is done)
-// even if the worker never answers; stopping the runaway process is the
-// worker's job (Task 3).
+// even if the worker never answers. At the same deadline the worker answers
+// 504 itself and kills and restarts the runaway process.
 //
 // Invoke alone maintains the Queued and InFlight gauges, so they cannot leak
 // whatever happens to the invocation inside a worker.
@@ -150,7 +150,8 @@ func (p *Pool) requeue(inv *invocation) {
 	}()
 }
 
-// Ready reports whether at least one worker's bootstrap has polled /next.
+// Ready reports whether at least one worker's current bootstrap process has
+// polled /next without reporting /init/error.
 func (p *Pool) Ready() bool {
 	for _, w := range p.workers {
 		if w.ready.Load() {
