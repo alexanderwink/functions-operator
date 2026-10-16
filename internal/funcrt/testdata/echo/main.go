@@ -5,6 +5,8 @@
 //	{"sleep":"2s"}   sleeps for the duration, then returns null
 //	{"error":"boom"} returns errors.New("boom")
 //	{"exit":1}       calls os.Exit(1)
+//	{"rawPath":"/p",...} (an API Gateway v2 event) returns a response whose
+//	                 body is the rawPath
 //
 // With ECHO_INIT_FAIL=1 in the environment it exits with code 2 before calling
 // lambda.Start.
@@ -17,6 +19,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
@@ -25,12 +28,17 @@ type request struct {
 	Sleep string          `json:"sleep,omitempty"`
 	Error string          `json:"error,omitempty"`
 	Exit  *int            `json:"exit,omitempty"`
+
+	RawPath *string `json:"rawPath,omitempty"`
 }
 
 func handle(_ context.Context, in json.RawMessage) (json.RawMessage, error) {
 	var req request
 	if err := json.Unmarshal(in, &req); err != nil {
 		return nil, err
+	}
+	if req.RawPath != nil {
+		return json.Marshal(events.APIGatewayV2HTTPResponse{StatusCode: 200, Body: *req.RawPath})
 	}
 	if req.Exit != nil {
 		os.Exit(*req.Exit)
