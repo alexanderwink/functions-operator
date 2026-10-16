@@ -32,6 +32,9 @@ func TestToEventBasic(t *testing.T) {
 	if got := ev.QueryStringParameters["a"]; got != "1,2" {
 		t.Errorf("query a = %q", got)
 	}
+	if ev.Headers["host"] != "svc.example" {
+		t.Errorf("host header = %q", ev.Headers["host"])
+	}
 	if ev.Headers["x-foo"] != "bar" || ev.Headers["x-multi"] != "1,2" {
 		t.Errorf("headers = %v", ev.Headers)
 	}
@@ -128,6 +131,24 @@ func TestWriteResponseErrors(t *testing.T) {
 		WriteResponse(w, Result{Status: st, Payload: []byte(`{"errorMessage":"x"}`)})
 		if w.Code != st || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != `{"errorMessage":"x"}` {
 			t.Errorf("status %d: code=%d body=%q", st, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestWriteResponseDefaultContentType(t *testing.T) {
+	w := httptest.NewRecorder()
+	WriteResponse(w, Result{Status: 200, Payload: []byte(`{"statusCode":200,"body":"{\"a\":1}"}`)})
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("default content-type = %q", ct)
+	}
+	for _, p := range []string{
+		`{"statusCode":200,"headers":{"content-type":"text/plain"},"body":"x"}`,
+		`{"statusCode":200,"multiValueHeaders":{"Content-Type":["text/plain"]},"body":"x"}`,
+	} {
+		w = httptest.NewRecorder()
+		WriteResponse(w, Result{Status: 200, Payload: []byte(p)})
+		if ct := w.Header().Get("Content-Type"); ct != "text/plain" {
+			t.Errorf("%s: content-type = %q", p, ct)
 		}
 	}
 }

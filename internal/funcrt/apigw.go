@@ -30,6 +30,10 @@ func ToEvent(r *http.Request, requestID string, now time.Time) (events.APIGatewa
 		headers[strings.ToLower(k)] = strings.Join(v, ",")
 	}
 
+	if r.Host != "" {
+		headers["host"] = r.Host // Go strips Host from r.Header
+	}
+
 	var query map[string]string
 	if q := r.URL.Query(); len(q) > 0 {
 		query = make(map[string]string, len(q))
@@ -153,6 +157,9 @@ func writeStructured(w http.ResponseWriter, resp events.APIGatewayV2HTTPResponse
 		for _, v := range vs {
 			h.Add(k, v)
 		}
+	}
+	if h.Get("Content-Type") == "" {
+		h.Set("Content-Type", "application/json") // API Gateway's default
 	}
 	for _, c := range resp.Cookies {
 		h.Add("Set-Cookie", c)
