@@ -60,7 +60,7 @@ func Fetch(ctx context.Context, c *minio.Client, bucket, object, etag, dest stri
 	if err != nil {
 		return mapErr(err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }()
 
 	// GetObject is lazy; the first Stat/Read surfaces HTTP errors.
 	if _, err := obj.Stat(); err != nil {
@@ -104,7 +104,7 @@ func mapErr(err error) error {
 // Run executes the fetcher using env lookups; it returns the process exit code.
 func Run(ctx context.Context, getenv func(string) string, arch string, stderr io.Writer) int {
 	fail := func(format string, a ...any) int {
-		fmt.Fprintf(stderr, "fetcher: "+format+"\n", a...)
+		_, _ = fmt.Fprintf(stderr, "fetcher: "+format+"\n", a...)
 		return 1
 	}
 	var missing []string
@@ -151,7 +151,7 @@ func Run(ctx context.Context, getenv func(string) string, arch string, stderr io
 	if err := Fetch(ctx, c, bucket, object, etag, dest); err != nil {
 		if errors.Is(err, ErrETagMismatch) {
 			_ = os.WriteFile(termLog, []byte("etag-mismatch"), 0o644)
-			fmt.Fprintf(stderr, "fetcher: %s/%s: %v\n", bucket, object, err)
+			_, _ = fmt.Fprintf(stderr, "fetcher: %s/%s: %v\n", bucket, object, err)
 			return 3
 		}
 		return fail("fetching %s/%s: %v", bucket, object, err)

@@ -52,6 +52,12 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Tests repeat literals and use long table-driven functions on purpose.
+      - linters:
+          - goconst
+          - gocyclo
+          - unparam
+        path: _test\.go$
     paths:
       - third_party$
       - builtin$

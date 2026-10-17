@@ -140,8 +140,7 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 	ev, err := ToEvent(r, newRequestID(), start)
 	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		} else {
 			http.Error(w, "reading request body: "+err.Error(), http.StatusBadRequest)

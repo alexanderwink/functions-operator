@@ -31,7 +31,7 @@ func BackendService(fn *v1alpha1.Function) *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Selector: labels(fn),
 			Ports: []corev1.ServicePort{{
-				Name: "http", Port: servicePort, TargetPort: intstr.FromInt32(servicePort), Protocol: corev1.ProtocolTCP,
+				Name: portName, Port: servicePort, TargetPort: intstr.FromInt32(servicePort), Protocol: corev1.ProtocolTCP,
 			}},
 		},
 	}
@@ -44,7 +44,7 @@ func PublicService(fn *v1alpha1.Function, interceptorHost string) *corev1.Servic
 		Spec: corev1.ServiceSpec{
 			Type:         corev1.ServiceTypeExternalName,
 			ExternalName: interceptorHost,
-			Ports:        []corev1.ServicePort{{Name: "http", Port: servicePort, Protocol: corev1.ProtocolTCP}},
+			Ports:        []corev1.ServicePort{{Name: portName, Port: servicePort, Protocol: corev1.ProtocolTCP}},
 		},
 	}
 }

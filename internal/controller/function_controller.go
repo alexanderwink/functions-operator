@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -300,9 +301,7 @@ func mergeLabels(obj metav1.Object, want map[string]string) {
 	if l == nil {
 		l = map[string]string{}
 	}
-	for k, v := range want {
-		l[k] = v
-	}
+	maps.Copy(l, want)
 	obj.SetLabels(l)
 }
 

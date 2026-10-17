@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -275,9 +276,7 @@ func (w *worker) handleNext(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	h := rw.Header()
-	for k, v := range w.nextHeaders(inv) {
-		h[k] = v
-	}
+	maps.Copy(h, w.nextHeaders(inv))
 	h.Set("Content-Type", "application/json")
 	rw.WriteHeader(http.StatusOK)
 	_, _ = rw.Write(inv.payload)

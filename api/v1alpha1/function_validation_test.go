@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -171,9 +172,7 @@ func rawSpec(over map[string]any) map[string]any {
 		"type":   "service",
 		"source": map[string]any{"bucket": "b", "version": "latest"},
 	}
-	for k, v := range over {
-		spec[k] = v
-	}
+	maps.Copy(spec, over)
 	return spec
 }
 

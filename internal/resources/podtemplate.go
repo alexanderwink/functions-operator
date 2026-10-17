@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 
@@ -29,11 +29,15 @@ const (
 	// AnnotationSourceHash changes whenever the resolved source changes.
 	AnnotationSourceHash = "functions.pulsen.se/source-hash"
 
+	portName    = "http"
+	servicePort = 8080
+	adminPort   = 9090
+)
+
+const (
 	runtimeUID   int64 = 65532
-	servicePort        = 8080
-	adminPort          = 9090
-	podOverheadM       = 64 // MiB
-	mibPerCPU          = 1769
+	podOverheadM int64 = 64 // MiB
+	mibPerCPU    int64 = 1769
 )
 
 func labels(fn *v1alpha1.Function) map[string]string {
@@ -46,7 +50,7 @@ func SourceHash(r source.Resolved) string {
 	for a, e := range r.ETags {
 		pairs = append(pairs, a+"="+e)
 	}
-	sort.Strings(pairs)
+	slices.Sort(pairs)
 	h := sha256.New()
 	h.Write([]byte(r.Prefix))
 	for _, p := range pairs {
@@ -80,10 +84,7 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 	memMiB := fn.Spec.Memory.Value() / (1 << 20)
 	conc := concurrency(fn)
 	limit := resource.MustParse(strconv.FormatInt(memMiB*conc+podOverheadM, 10) + "Mi")
-	cpuM := (memMiB*conc*1000 + mibPerCPU - 1) / mibPerCPU
-	if cpuM < 50 {
-		cpuM = 50
-	}
+	cpuM := max((memMiB*conc*1000+mibPerCPU-1)/mibPerCPU, 50)
 	mode := "service"
 	if fn.Spec.Type == v1alpha1.FunctionTypeJob {
 		mode = "job"
@@ -94,15 +95,16 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 	uid := runtimeUID
 	nonRoot := true
 
-	fetchEnv := []corev1.EnvVar{
+	archs := append([]string(nil), fn.Spec.Architectures...)
+	fetchEnv := make([]corev1.EnvVar, 0, 6+len(archs))
+	fetchEnv = append(fetchEnv,
 		secretEnv("S3_ENDPOINT", "endpoint"),
 		secretEnv("S3_ACCESS_KEY", "accessKey"),
 		secretEnv("S3_SECRET_KEY", "secretKey"),
 		secretEnv("S3_USE_SSL", "useSSL"),
-		{Name: "FETCH_BUCKET", Value: fn.Spec.Source.Bucket},
-		{Name: "FETCH_PREFIX", Value: r.Prefix},
-	}
-	archs := append([]string(nil), fn.Spec.Architectures...)
+		corev1.EnvVar{Name: "FETCH_BUCKET", Value: fn.Spec.Source.Bucket},
+		corev1.EnvVar{Name: "FETCH_PREFIX", Value: r.Prefix},
+	)
 	for _, a := range archs {
 		fetchEnv = append(fetchEnv, corev1.EnvVar{Name: "FETCH_ETAG_" + upper(a), Value: r.ETags[a]})
 	}
@@ -175,7 +177,7 @@ func PodTemplate(fn *v1alpha1.Function, r source.Resolved, runtimeImage string) 
 				Name:  "funcrt",
 				Image: runtimeImage,
 				Env:   env,
-				Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: servicePort}},
+				Ports: []corev1.ContainerPort{{Name: portName, ContainerPort: servicePort}},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{corev1.ResourceMemory: limit},
 					Requests: corev1.ResourceList{

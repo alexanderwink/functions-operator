@@ -4,3 +4,5 @@ cover.out
 *.test
 .DS_Store
 samples/out/
+samples/dotnet-hello/obj/
+samples/dotnet-hello/bin/

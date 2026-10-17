@@ -67,13 +67,17 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 .PHONY: test-e2e
 test-e2e: e2e ## Alias for `make e2e` (the kind suite in test/e2e/e2e.sh).
 
+# golangci-lint can't read export data from Go toolchains newer than it was built
+# for, so lint with the go.mod version (what CI uses) regardless of the local Go.
+LINT_GOTOOLCHAIN ?= go$(shell sed -n 's/^go //p' go.mod)
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
-	"$(GOLANGCI_LINT)" run
+	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) "$(GOLANGCI_LINT)" run
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	"$(GOLANGCI_LINT)" run --fix
+	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) "$(GOLANGCI_LINT)" run --fix
 
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
