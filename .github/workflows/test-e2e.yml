@@ -1,8 +1,9 @@
 name: E2E Tests
 
+# Manual only: the kind setup assumes podman and builds arm64 samples, which GitHub's
+# amd64 docker runners can't do as-is. Run the suite locally with `make e2e`.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions: {}
 
